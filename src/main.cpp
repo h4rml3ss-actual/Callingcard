@@ -78,6 +78,7 @@ void drawStatus(const char* mode) {
             latest[i].label, latest[i].rssiDbm);
   }
   d.printf("Q:%u Drop:%lu\n", pipeline.queued(), static_cast<unsigned long>(pipeline.dropped()));
+  d.printf("CAP:%s E:%d\n", cap.failureStage(), cap.radioError());
   d.printf("GPS:%s LORA:%s RX:%lu\n", cap.gnssFix() ? "FIX" : "NOFIX", cap.radioReady() ? "OK" : "ERR", static_cast<unsigned long>(cap.packetCount()));
 }
 
