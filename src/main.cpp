@@ -6,6 +6,7 @@
 #include <BLEDevice.h>
 #include <BLEScan.h>
 #include "Observation.h"
+#include "CapSensors.h"
 
 namespace {
 constexpr uint32_t kPauseMs = 2500;
@@ -20,6 +21,8 @@ uint32_t errorCount = 0;
 uint32_t wifiElapsedMs = 0;
 uint32_t bleElapsedMs = 0;
 uint32_t lastScanEndMs = 0;
+uint32_t nextCapLogMs = 0;
+callingcard::CapSensors cap;
 bool scanWifiNext = true;
 BLEScan* bleScanner = nullptr;
 callingcard::Observation latest[kMaxLines]{};
@@ -75,7 +78,7 @@ void drawStatus(const char* mode) {
             latest[i].kind == callingcard::Kind::WifiNetwork ? 'W' : 'B',
             latest[i].label, latest[i].rssiDbm);
   }
-  d.println("Alternating scans");
+  d.printf("GPS:%s LORA:%s RX:%lu\n", cap.gnssFix() ? "FIX" : "NOFIX", cap.radioReady() ? "OK" : "ERR", static_cast<unsigned long>(cap.packetCount()));
 }
 
 void surveyWifi() {
@@ -139,12 +142,18 @@ void setup() {
   bleScanner->setActiveScan(false); // passive advertisements only
   bleScanner->setInterval(160);     // 100 ms units of 0.625 ms
   bleScanner->setWindow(80);        // 50 ms receive window
-  Serial.println("Callingcard PR3 WiFi/BLE scheduled baseline boot");
+  cap.begin();
+  Serial.println("Callingcard PR4 WiFi/BLE + LoRa1262/GNSS boot");
   drawStatus("READY");
 }
 
 void loop() {
   M5Cardputer.update();
+  cap.poll();
+  if (static_cast<int32_t>(millis() - nextCapLogMs) >= 0) {
+    cap.logStatus();
+    nextCapLogMs = millis() + 10000;
+  }
   if (static_cast<int32_t>(millis() - nextScanMs) >= 0) {
     ++scanNumber;
     drawStatus(scanWifiNext ? "SCANNING WIFI" : "SCANNING BLE");

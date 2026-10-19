@@ -1,0 +1,96 @@
+#include "CapSensors.h"
+
+namespace callingcard {
+volatile bool CapSensors::rxFlag_ = false;
+
+#if defined(ESP8266) || defined(ESP32)
+IRAM_ATTR
+#endif
+void CapSensors::onPacket() {
+  rxFlag_ = true;
+}
+
+void CapSensors::begin() {
+  // Cap GNSS UART: module TX GPIO13 -> host RX GPIO15.
+  gpsUart_.setRxBufferSize(2048);
+  gpsUart_.begin(115200, SERIAL_8N1, 15, 13);
+  gpsInitialized_ = true;
+
+  // Cap-1262 requires IO-expander pin P0 high to enable RF antenna switch.
+  // Fail closed when expander is unavailable; do not assume a different Cap.
+  if (!m5::In_I2C.begin(I2C_NUM_0, 8, 9)) {
+    Serial.println("CAP I2C: initialization failed; LoRa disabled");
+    return;
+  }
+  if (!expander_.begin()) {
+    Serial.println("CAP IO expander absent; LoRa disabled");
+    return;
+  }
+  expander_.setDirection(0, true);
+  expander_.setHighImpedance(0, false);
+  expander_.digitalWrite(0, true);
+
+  // Explicit SPI pins shared with Cardputer SD. SD operations must be serialized.
+  SPI.begin(40, 39, 14, 5);
+  // US915 receive-only TEST profile, not a Meshtastic or arbitrary-LoRa decoder.
+  // Match frequency, SF, BW, sync word and other settings to a known transmitter.
+  radioState_ = radio_.begin(915.0, 125.0, 9, 5, 0x12, 10, 8, 3.0, true);
+  Serial.printf("CAP SX1262 init status=%d\n", radioState_);
+  if (radioReady()) {
+    radio_.setPacketReceivedAction(onPacket);
+    const int state = radio_.startReceive();
+    if (state != RADIOLIB_ERR_NONE) {
+      radioState_ = state;
+      Serial.printf("CAP startReceive failed=%d\n", state);
+    }
+  }
+}
+
+bool CapSensors::gnssFix() const {
+  return gpsInitialized_ && gps_.location.isValid() &&
+         gps_.location.age() < 10000;
+}
+
+void CapSensors::poll() {
+  // Max bytes per pass to preserve main loop responsiveness.
+  for (unsigned i = 0; i < 256 && gpsUart_.available(); ++i) {
+    gps_.encode(gpsUart_.read());
+    lastGpsSentenceMs_ = millis();
+  }
+  if (radioReady() && rxFlag_) {
+    noInterrupts();
+    rxFlag_ = false;
+    interrupts();
+    String payload;
+    int rc = radio_.readData(payload);
+    if (rc == RADIOLIB_ERR_NONE) {
+      ++packets_;
+      // Avoid collecting arbitrary payload content; report radio metadata only.
+      Serial.printf("CAP LORA RX count=%lu rssi=%.1f snr=%.1f\n",
+                    static_cast<unsigned long>(packets_),
+                    radio_.getRSSI(), radio_.getSNR());
+    } else {
+      Serial.printf("CAP LORA read status=%d\n", rc);
+    }
+    const int restart = radio_.startReceive();
+    if (restart != RADIOLIB_ERR_NONE) {
+      radioState_ = restart;
+      Serial.printf("CAP LORA RX restart failure=%d\n", restart);
+    }
+  }
+}
+
+void CapSensors::logStatus() {
+  Serial.printf("CAP GPS bytes=%lu location=%s sats=%lu uart_age_ms=%lu lora_ready=%d packets=%lu\n",
+    static_cast<unsigned long>(gps_.charsProcessed()),
+    gnssFix() ? "FIX" : "NO_FIX",
+    static_cast<unsigned long>(gps_.satellites.isValid() ? gps_.satellites.value() : 0),
+    static_cast<unsigned long>(millis() - lastGpsSentenceMs_),
+    radioReady(), static_cast<unsigned long>(packets_));
+  if (gnssFix()) {
+    Serial.printf("CAP GPS latitude=%.6f longitude=%.6f age_ms=%lu\n",
+      gps_.location.lat(), gps_.location.lng(),
+      static_cast<unsigned long>(gps_.location.age()));
+  }
+}
+}
