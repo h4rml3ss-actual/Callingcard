@@ -28,14 +28,14 @@ void CapSensors::begin() {
   // Use M5Unified's existing I2C bus, not a second Wire instance which
   // could reconfigure the controller while other M5 peripherals are active.
   // A one-time bus scan avoids repeatedly probing active I2C peripherals.
-  bool present[120] = {};
-  m5::In_I2C.scanID(present);
+  // Preserve startup scan for monitoring after USB CDC reconnect.
+  m5::In_I2C.scanID(detectedI2cAddresses_);
   for (uint8_t address = 0x08; address < 0x78; ++address) {
-    if (!present[address]) continue;
+    if (!detectedI2cAddresses_[address]) continue;
     ++detectedI2cCount_;
     Serial.printf("CAP I2C found=0x%02X\n", address);
   }
-  expanderAck_ = present[0x43];
+  expanderAck_ = detectedI2cAddresses_[0x43];
   Serial.printf("CAP I2C probe target=0x43 ack=%d devices=%u\n",
                 expanderAck_, detectedI2cCount_);
   stage_ = "EXPANDER";
@@ -118,6 +118,14 @@ void CapSensors::logStatus() {
     static_cast<unsigned long>(gps_.failedChecksum()), gnssFix());
   Serial.printf("CAP I2C status initialized=%d target_0x43_ack=%d devices=%u expander_driver=%d\n",
                 i2cOk_, expanderAck_, detectedI2cCount_, expanderOk_);
+  Serial.print("CAP I2C addresses:");
+  if (detectedI2cCount_ == 0) Serial.print(" none");
+  for (uint8_t address = 0x08; address < 0x78; ++address) {
+    if (detectedI2cAddresses_[address]) {
+      Serial.printf(" 0x%02X", address);
+    }
+  }
+  Serial.println();
   Serial.printf("CAP GPS bytes=%lu location=%s sats=%lu uart_age_ms=%lu lora_ready=%d packets=%lu\n",
     static_cast<unsigned long>(gps_.charsProcessed()),
     gnssFix() ? "FIX" : "NO_FIX",

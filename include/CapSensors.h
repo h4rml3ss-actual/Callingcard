@@ -29,6 +29,8 @@ class CapSensors {
   bool expanderOk_ = false;
   bool expanderAck_ = false;
   uint8_t detectedI2cCount_ = 0;
+  // Full 7-bit address space; fixed allocation and no dynamic strings.
+  bool detectedI2cAddresses_[128] = {};
   int initCode_ = -999;
   int receiveCode_ = -999;
   const char* stage_ = "NOT_STARTED";
