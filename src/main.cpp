@@ -1,51 +1,127 @@
-// Callingcard Cardputer ADV hardware baseline.
-// Intentional scope: local display + bounded 2.4 GHz Wi-Fi SSID survey.
-// BLE, GNSS, LoRa, SD and HUD remain separate milestones.
+// Callingcard PR3: scheduled Wi-Fi survey and BLE advertisement discovery.
+// This is a field-observation smoke test, not continuous packet capture.
 #include <Arduino.h>
 #include <M5Cardputer.h>
 #include <WiFi.h>
+#include <BLEDevice.h>
+#include <BLEScan.h>
+#include "Observation.h"
 
 namespace {
-constexpr uint32_t kScanPeriodMs = 10000;
-constexpr int kMaxDisplayed = 5;
-uint32_t nextScanMs = 0;
+constexpr uint32_t kPauseMs = 2500;
+constexpr uint32_t kBleScanSeconds = 4;
+constexpr int kMaxLines = 5;
 uint32_t scanNumber = 0;
+uint32_t nextScanMs = 0;
+uint32_t wifiCount = 0;
+uint32_t bleCount = 0;
+uint32_t bleCallbacks = 0;
+uint32_t errorCount = 0;
+uint32_t wifiElapsedMs = 0;
+uint32_t bleElapsedMs = 0;
+uint32_t lastScanEndMs = 0;
+bool scanWifiNext = true;
+BLEScan* bleScanner = nullptr;
+callingcard::Observation latest[kMaxLines]{};
+int latestCount = 0;
 
-void drawHeader(const char* state) {
-  auto& d = M5Cardputer.Display;
-  d.fillScreen(TFT_BLACK);
-  d.setCursor(4, 3);
-  d.setTextSize(1);
-  d.setTextColor(TFT_GREEN, TFT_BLACK);
-  d.println("CALLINGCARD / ADV");
-  d.setTextColor(TFT_WHITE, TFT_BLACK);
-  d.printf("%s   #%lu\n", state, static_cast<unsigned long>(scanNumber));
+void addObservation(const callingcard::Observation& observation) {
+  if (latestCount < kMaxLines) {
+    latest[latestCount++] = observation;
+  }
+  Serial.printf("OBS kind=%s rssi=%d channel=%d uptime_ms=%lu label=%s\n",
+                callingcard::kindName(observation.kind),
+                observation.rssiDbm, observation.channel,
+                static_cast<unsigned long>(observation.uptimeMs),
+                observation.label);
 }
 
-void survey() {
-  ++scanNumber;
-  drawHeader("SCANNING");
-  // Blocking survey deliberately chosen for the first hardware smoke test.
-  // Do not interpret counts as continuous packet monitoring.
-  int count = WiFi.scanNetworks(false, true);
-  drawHeader(count < 0 ? "SCAN ERROR" : "WIFI SURVEY");
+class AdvertisedCallback : public BLEAdvertisedDeviceCallbacks {
+ void onResult(BLEAdvertisedDevice device) override {
+   ++bleCallbacks;
+   if (latestCount >= kMaxLines) return;
+   callingcard::Observation item{};
+   item.kind = callingcard::Kind::BleAdvertisement;
+   item.uptimeMs = millis();
+   item.rssiDbm = device.getRSSI();
+   item.channel = -1;
+   // Do not retain advertised device addresses by default.
+   const std::string name = device.getName();
+   snprintf(item.label, sizeof(item.label), "%s",
+            name.empty() ? "<unnamed BLE>" : name.c_str());
+   addObservation(item);
+ }
+};
+AdvertisedCallback callback;
+
+void drawStatus(const char* mode) {
   auto& d = M5Cardputer.Display;
-  d.printf("APs: %d   Heap: %u\n", count < 0 ? 0 : count, ESP.getFreeHeap());
-  if (count > 0) {
-    int limit = count < kMaxDisplayed ? count : kMaxDisplayed;
-    for (int i = 0; i < limit; ++i) {
+  d.fillScreen(TFT_BLACK);
+  d.setTextFont(1);
+  d.setTextSize(1);
+  d.setTextColor(TFT_GREEN, TFT_BLACK);
+  d.setCursor(3, 2);
+  d.println("CALLINGCARD  ADV");
+  d.setTextColor(TFT_WHITE, TFT_BLACK);
+  d.printf("%s #%lu\n", mode, static_cast<unsigned long>(scanNumber));
+  d.printf("WIFI:%lu BLE:%lu\n", static_cast<unsigned long>(wifiCount),
+           static_cast<unsigned long>(bleCount));
+  d.printf("W:%lums B:%lums\n", static_cast<unsigned long>(wifiElapsedMs),
+           static_cast<unsigned long>(bleElapsedMs));
+  d.printf("Heap:%u Err:%lu\n", ESP.getFreeHeap(),
+           static_cast<unsigned long>(errorCount));
+  for (int i = 0; i < latestCount; ++i) {
+    d.printf("%c %-15.15s %4d\n",
+            latest[i].kind == callingcard::Kind::WifiNetwork ? 'W' : 'B',
+            latest[i].label, latest[i].rssiDbm);
+  }
+  d.println("Alternating scans");
+}
+
+void surveyWifi() {
+  latestCount = 0;
+  const uint32_t beginMs = millis();
+  // Synchronous survey intentionally has monitoring blind spots.
+  const int found = WiFi.scanNetworks(false, true);
+  wifiElapsedMs = millis() - beginMs;
+  if (found < 0) {
+    ++errorCount;
+    wifiCount = 0;
+  } else {
+    wifiCount = static_cast<uint32_t>(found);
+    for (int i = 0; i < found && latestCount < kMaxLines; ++i) {
+      callingcard::Observation item{};
+      item.kind = callingcard::Kind::WifiNetwork;
+      item.uptimeMs = millis();
+      item.rssiDbm = WiFi.RSSI(i);
+      item.channel = WiFi.channel(i);
       String ssid = WiFi.SSID(i);
-      if (ssid.isEmpty()) ssid = "<hidden>";
-      // Display truncation is intentional; avoid variable-sized buffers.
-      if (ssid.length() > 19) ssid = ssid.substring(0, 19);
-      d.printf("%2d %-19s %4d\n", i + 1, ssid.c_str(), WiFi.RSSI(i));
+      if (ssid.length() == 0) ssid = "<hidden>";
+      snprintf(item.label, sizeof(item.label), "%s", ssid.c_str());
+      addObservation(item);
     }
   }
-  d.println("2.4GHz only | no logging");
-  Serial.printf("survey=%lu networks=%d heap=%u\n",
-                static_cast<unsigned long>(scanNumber), count, ESP.getFreeHeap());
   WiFi.scanDelete();
-  nextScanMs = millis() + kScanPeriodMs;
+  Serial.printf("CYCLE mode=wifi count=%lu duration_ms=%lu heap=%u errors=%lu\n",
+       static_cast<unsigned long>(wifiCount),
+       static_cast<unsigned long>(wifiElapsedMs), ESP.getFreeHeap(),
+       static_cast<unsigned long>(errorCount));
+}
+
+void surveyBle() {
+  latestCount = 0;
+  bleCallbacks = 0;
+  const uint32_t beginMs = millis();
+  // Scanning uses finite, bounded windows; no BLE peripheral connection yet.
+  BLEScanResults result = bleScanner->start(kBleScanSeconds, false);
+  bleElapsedMs = millis() - beginMs;
+  bleCount = static_cast<uint32_t>(result.getCount());
+  bleScanner->clearResults();
+  Serial.printf("CYCLE mode=ble unique=%lu callbacks=%lu duration_ms=%lu heap=%u errors=%lu\n",
+       static_cast<unsigned long>(bleCount),
+       static_cast<unsigned long>(bleCallbacks),
+       static_cast<unsigned long>(bleElapsedMs), ESP.getFreeHeap(),
+       static_cast<unsigned long>(errorCount));
 }
 }
 
@@ -57,12 +133,27 @@ void setup() {
   M5Cardputer.Display.setTextFont(1);
   WiFi.mode(WIFI_STA);
   WiFi.disconnect();
-  drawHeader("BOOT");
-  Serial.println("Callingcard ADV Wi-Fi baseline boot");
+  BLEDevice::init("Callingcard");
+  bleScanner = BLEDevice::getScan();
+  bleScanner->setAdvertisedDeviceCallbacks(&callback);
+  bleScanner->setActiveScan(false); // passive advertisements only
+  bleScanner->setInterval(160);     // 100 ms units of 0.625 ms
+  bleScanner->setWindow(80);        // 50 ms receive window
+  Serial.println("Callingcard PR3 WiFi/BLE scheduled baseline boot");
+  drawStatus("READY");
 }
 
 void loop() {
   M5Cardputer.update();
-  if (static_cast<int32_t>(millis() - nextScanMs) >= 0) survey();
+  if (static_cast<int32_t>(millis() - nextScanMs) >= 0) {
+    ++scanNumber;
+    drawStatus(scanWifiNext ? "SCANNING WIFI" : "SCANNING BLE");
+    if (scanWifiNext) surveyWifi();
+    else surveyBle();
+    lastScanEndMs = millis();
+    scanWifiNext = !scanWifiNext;
+    nextScanMs = lastScanEndMs + kPauseMs;
+    drawStatus("SURVEY COMPLETE");
+  }
   delay(30);
 }
