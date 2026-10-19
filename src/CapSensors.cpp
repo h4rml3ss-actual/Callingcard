@@ -11,6 +11,7 @@ void CapSensors::onPacket() {
 }
 
 void CapSensors::begin() {
+  stage_ = "I2C";
   // Cap GNSS UART: module TX GPIO13 -> host RX GPIO15.
   gpsUart_.setRxBufferSize(2048);
   gpsUart_.begin(115200, SERIAL_8N1, 15, 13);
@@ -22,10 +23,14 @@ void CapSensors::begin() {
     Serial.println("CAP I2C: initialization failed; LoRa disabled");
     return;
   }
+  i2cOk_ = true;
+  stage_ = "EXPANDER";
   if (!expander_.begin()) {
     Serial.println("CAP IO expander absent; LoRa disabled");
     return;
   }
+  expanderOk_ = true;
+  stage_ = "SX1262_INIT";
   expander_.setDirection(0, true);
   expander_.setHighImpedance(0, false);
   expander_.digitalWrite(0, true);
@@ -35,13 +40,18 @@ void CapSensors::begin() {
   // US915 receive-only TEST profile, not a Meshtastic or arbitrary-LoRa decoder.
   // Match frequency, SF, BW, sync word and other settings to a known transmitter.
   radioState_ = radio_.begin(915.0, 125.0, 9, 5, 0x12, 10, 8, 3.0, true);
+  initCode_ = radioState_;
   Serial.printf("CAP SX1262 init status=%d\n", radioState_);
   if (radioReady()) {
+    stage_ = "START_RX";
     radio_.setPacketReceivedAction(onPacket);
     const int state = radio_.startReceive();
+    receiveCode_ = state;
     if (state != RADIOLIB_ERR_NONE) {
       radioState_ = state;
       Serial.printf("CAP startReceive failed=%d\n", state);
+    } else {
+      stage_ = "READY";
     }
   }
 }
@@ -75,12 +85,19 @@ void CapSensors::poll() {
     const int restart = radio_.startReceive();
     if (restart != RADIOLIB_ERR_NONE) {
       radioState_ = restart;
+      receiveCode_ = restart;
+      stage_ = "RX_RESTART";
       Serial.printf("CAP LORA RX restart failure=%d\n", restart);
     }
   }
 }
 
 void CapSensors::logStatus() {
+  Serial.printf("CAP DIAG stage=%s i2c=%d expander=%d sx1262_init=%d rx_start=%d radio_state=%d gps_chars=%lu gps_passed=%lu gps_failed=%lu gps_fix=%d\n",
+    stage_, i2cOk_, expanderOk_, initCode_, receiveCode_, radioState_,
+    static_cast<unsigned long>(gps_.charsProcessed()),
+    static_cast<unsigned long>(gps_.passedChecksum()),
+    static_cast<unsigned long>(gps_.failedChecksum()), gnssFix());
   Serial.printf("CAP GPS bytes=%lu location=%s sats=%lu uart_age_ms=%lu lora_ready=%d packets=%lu\n",
     static_cast<unsigned long>(gps_.charsProcessed()),
     gnssFix() ? "FIX" : "NO_FIX",
