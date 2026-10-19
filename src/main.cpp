@@ -7,6 +7,7 @@
 #include <BLEScan.h>
 #include "Observation.h"
 #include "CapSensors.h"
+#include "EventPipeline.h"
 
 namespace {
 constexpr uint32_t kPauseMs = 2500;
@@ -23,6 +24,8 @@ uint32_t bleElapsedMs = 0;
 uint32_t lastScanEndMs = 0;
 uint32_t nextCapLogMs = 0;
 callingcard::CapSensors cap;
+callingcard::EventPipeline pipeline;
+uint32_t nextPipelineLogMs = 0;
 bool scanWifiNext = true;
 BLEScan* bleScanner = nullptr;
 callingcard::Observation latest[kMaxLines]{};
@@ -32,11 +35,7 @@ void addObservation(const callingcard::Observation& observation) {
   if (latestCount < kMaxLines) {
     latest[latestCount++] = observation;
   }
-  Serial.printf("OBS kind=%s rssi=%d channel=%d uptime_ms=%lu label=%s\n",
-                callingcard::kindName(observation.kind),
-                observation.rssiDbm, observation.channel,
-                static_cast<unsigned long>(observation.uptimeMs),
-                observation.label);
+  pipeline.enqueue(observation);
 }
 
 class AdvertisedCallback : public BLEAdvertisedDeviceCallbacks {
@@ -78,6 +77,7 @@ void drawStatus(const char* mode) {
             latest[i].kind == callingcard::Kind::WifiNetwork ? 'W' : 'B',
             latest[i].label, latest[i].rssiDbm);
   }
+  d.printf("Q:%u Drop:%lu\n", pipeline.queued(), static_cast<unsigned long>(pipeline.dropped()));
   d.printf("GPS:%s LORA:%s RX:%lu\n", cap.gnssFix() ? "FIX" : "NOFIX", cap.radioReady() ? "OK" : "ERR", static_cast<unsigned long>(cap.packetCount()));
 }
 
@@ -143,13 +143,20 @@ void setup() {
   bleScanner->setInterval(160);     // 100 ms units of 0.625 ms
   bleScanner->setWindow(80);        // 50 ms receive window
   cap.begin();
-  Serial.println("Callingcard PR4 WiFi/BLE + LoRa1262/GNSS boot");
+  Serial.println("Callingcard PR5 event pipeline boot");
   drawStatus("READY");
 }
 
 void loop() {
   M5Cardputer.update();
   cap.poll();
+  pipeline.drainTo(Serial, 8);
+  if (static_cast<int32_t>(millis() - nextPipelineLogMs) >= 0) {
+    Serial.printf("PIPE queue=%u emitted=%lu dropped=%lu heap=%u\n",
+                  pipeline.queued(), static_cast<unsigned long>(pipeline.emitted()),
+                  static_cast<unsigned long>(pipeline.dropped()), ESP.getFreeHeap());
+    nextPipelineLogMs = millis() + 10000;
+  }
   if (static_cast<int32_t>(millis() - nextCapLogMs) >= 0) {
     cap.logStatus();
     nextCapLogMs = millis() + 10000;
