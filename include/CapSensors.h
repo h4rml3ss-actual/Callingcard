@@ -17,12 +17,19 @@ class CapSensors {
   bool gnssFix() const;
   bool radioReady() const { return radioState_ == RADIOLIB_ERR_NONE; }
   uint32_t packetCount() const { return packets_; }
+  const char* failureStage() const { return stage_; }
+  int radioError() const { return radioState_; }
  private:
   HardwareSerial gpsUart_{1};
   TinyGPSPlus gps_{};
   SX1262 radio_{new Module(5, 4, 3, 6)};
   m5::PI4IOE5V6408_Class expander_{0x43, 400000, &m5::In_I2C};
   int radioState_ = -999;
+  bool i2cOk_ = false;
+  bool expanderOk_ = false;
+  int initCode_ = -999;
+  int receiveCode_ = -999;
+  const char* stage_ = "NOT_STARTED";
   uint32_t packets_ = 0;
   bool gpsInitialized_ = false;
   uint32_t lastGpsSentenceMs_ = 0;
