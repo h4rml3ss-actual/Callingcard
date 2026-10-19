@@ -33,10 +33,10 @@ void CapSensors::begin() {
   for (uint8_t address = 0x08; address < 0x78; ++address) {
     if (!present[address]) continue;
     ++detectedI2cCount_;
-    Serial.printf("CAP I2C found=0x%02X\\n", address);
+    Serial.printf("CAP I2C found=0x%02X\n", address);
   }
   expanderAck_ = present[0x43];
-  Serial.printf("CAP I2C probe target=0x43 ack=%d devices=%u\\n",
+  Serial.printf("CAP I2C probe target=0x43 ack=%d devices=%u\n",
                 expanderAck_, detectedI2cCount_);
   stage_ = "EXPANDER";
   if (!expanderAck_) {
@@ -116,7 +116,7 @@ void CapSensors::logStatus() {
     static_cast<unsigned long>(gps_.charsProcessed()),
     static_cast<unsigned long>(gps_.passedChecksum()),
     static_cast<unsigned long>(gps_.failedChecksum()), gnssFix());
-  Serial.printf("CAP I2C status initialized=%d target_0x43_ack=%d devices=%u expander_driver=%d\\n",
+  Serial.printf("CAP I2C status initialized=%d target_0x43_ack=%d devices=%u expander_driver=%d\n",
                 i2cOk_, expanderAck_, detectedI2cCount_, expanderOk_);
   Serial.printf("CAP GPS bytes=%lu location=%s sats=%lu uart_age_ms=%lu lora_ready=%d packets=%lu\n",
     static_cast<unsigned long>(gps_.charsProcessed()),
