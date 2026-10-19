@@ -27,6 +27,8 @@ class CapSensors {
   int radioState_ = -999;
   bool i2cOk_ = false;
   bool expanderOk_ = false;
+  bool expanderAck_ = false;
+  uint8_t detectedI2cCount_ = 0;
   int initCode_ = -999;
   int receiveCode_ = -999;
   const char* stage_ = "NOT_STARTED";
