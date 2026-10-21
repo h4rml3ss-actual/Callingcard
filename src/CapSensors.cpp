@@ -48,9 +48,37 @@ void CapSensors::begin() {
 
   // Explicit SPI pins shared with Cardputer SD. SD operations must be serialized.
   SPI.begin(40, 39, 14, 5);
-  // US915 receive-only TEST profile, not a Meshtastic or arbitrary-LoRa decoder.
-  // Match frequency, SF, BW, sync word and other settings to a known transmitter.
-  radioState_ = radio_.begin(915.0, 125.0, 9, 5, 0x12, 10, 8, 3.0, true);
+  // Two explicitly selected receive-only PHY profiles; neither sends packets.
+  // LongFast parameters are verified against Meshtastic's radio preset table
+  // and on-device US channel frequency captured in reference firmware logs.
+  // The sync word and preamble match Meshtastic's over-the-air PHY convention.
+#ifndef CALLINGCARD_LORA_PROFILE
+#define CALLINGCARD_LORA_PROFILE 1
+#endif
+#if CALLINGCARD_LORA_PROFILE == 1
+  constexpr const char* profileName = "MESHTASTIC_US_LONGFAST";
+  constexpr float frequencyMHz = 906.875;
+  constexpr float bandwidthKHz = 250.0;
+  constexpr uint8_t spreadingFactor = 11;
+  constexpr uint8_t codingRate = 5;  // 4/5
+  constexpr uint8_t syncWord = 0x2B;
+  constexpr uint16_t preambleSymbols = 16;
+#elif CALLINGCARD_LORA_PROFILE == 0
+  constexpr const char* profileName = "LEGACY_915_TEST";
+  constexpr float frequencyMHz = 915.0;
+  constexpr float bandwidthKHz = 125.0;
+  constexpr uint8_t spreadingFactor = 9;
+  constexpr uint8_t codingRate = 5;
+  constexpr uint8_t syncWord = 0x12;
+  constexpr uint16_t preambleSymbols = 8;
+#else
+#error "Unsupported CALLINGCARD_LORA_PROFILE: use 0 (legacy) or 1 (Meshtastic US LongFast)"
+#endif
+  Serial.printf("CAP LORA PROFILE name=%s freq_mhz=%.3f bw_khz=%.1f sf=%u cr=4/%u sync=0x%02X preamble=%u rx_only=1\n",
+                profileName, frequencyMHz, bandwidthKHz, spreadingFactor,
+                codingRate, syncWord, preambleSymbols);
+  radioState_ = radio_.begin(frequencyMHz, bandwidthKHz, spreadingFactor,
+                             codingRate, syncWord, 10, preambleSymbols, 3.0, true);
   initCode_ = radioState_;
   Serial.printf("CAP SX1262 init status=%d\n", radioState_);
   if (radioReady()) {
