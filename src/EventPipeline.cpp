@@ -46,6 +46,10 @@ void EventPipeline::printEvent(Print& out, const Observation& o) {
   else out.print(o.channel);
   out.print(F(",\"label\":\""));
   printEscaped(out, o.label);
+  if (o.kind == Kind::LoRaPacket) {
+    out.print(F("\",\"snr_db\":"));
+    out.print(o.snrDb, 1);
+  }
   out.println(F("\",\"utc\":null,\"position\":null}"));
 }
 
