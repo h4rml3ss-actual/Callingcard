@@ -18,7 +18,7 @@ class CapSensors {
   void logStatus();
   bool gnssFix() const;
   bool gnssUtc(char* buffer, size_t size);
-  uint32_t satellites() const { return gps_.satellites.isValid() ? gps_.satellites.value() : 0; }
+  uint32_t satellites() { return gps_.satellites.isValid() ? gps_.satellites.value() : 0; }
   void annotate(Observation& observation);
   bool radioReady() const { return radioState_ == RADIOLIB_ERR_NONE; }
   uint32_t packetCount() const { return packets_; }
