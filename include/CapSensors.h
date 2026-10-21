@@ -8,6 +8,7 @@
 
 namespace callingcard {
 class EventPipeline;
+struct Observation;
 // Driver for the M5Stack Cap LoRa-1262 only. Receive-only by design.
 // No GPS location is emitted without a current valid fix.
 class CapSensors {
@@ -16,6 +17,7 @@ class CapSensors {
   void poll(EventPipeline& events);
   void logStatus();
   bool gnssFix() const;
+  void annotate(Observation& observation) const;
   bool radioReady() const { return radioState_ == RADIOLIB_ERR_NONE; }
   uint32_t packetCount() const { return packets_; }
   const char* failureStage() const { return stage_; }

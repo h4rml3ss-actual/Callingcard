@@ -177,7 +177,9 @@ void addObservation(const callingcard::Observation& observation) {
   if (latestCount < kMaxLines) {
     latest[latestCount++] = observation;
   }
-  pipeline.enqueue(observation);
+  callingcard::Observation enriched = observation;
+  cap.annotate(enriched);
+  pipeline.enqueue(enriched);
 }
 
 class AdvertisedCallback : public BLEAdvertisedDeviceCallbacks {

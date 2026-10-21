@@ -105,6 +105,29 @@ void CapSensors::begin() {
   }
 }
 
+void CapSensors::annotate(Observation& o) const {
+  // Snapshot ONLY fresh GNSS fields at observation time. Position and
+  // time have independent validity; stale or uninitialized fields stay null.
+  // Reject implausible dates rather than fabricating UTC from millis().
+  if (gps_.date.isValid() && gps_.time.isValid() &&
+      gps_.date.age() <= 2000 && gps_.time.age() <= 2000 &&
+      gps_.date.year() >= 2020 && gps_.date.year() <= 2099 &&
+      gps_.date.month() >= 1 && gps_.date.month() <= 12 &&
+      gps_.date.day() >= 1 && gps_.date.day() <= 31 &&
+      gps_.time.hour() <= 23 && gps_.time.minute() <= 59 &&
+      gps_.time.second() <= 59) {
+    snprintf(o.utc, sizeof(o.utc), "%04u-%02u-%02uT%02u:%02u:%02uZ",
+             gps_.date.year(), gps_.date.month(), gps_.date.day(),
+             gps_.time.hour(), gps_.time.minute(), gps_.time.second());
+    o.hasUtc = true;
+  }
+  if (gnssFix() && gps_.location.age() <= 2000) {
+    o.latitude = gps_.location.lat();
+    o.longitude = gps_.location.lng();
+    o.hasPosition = true;
+  }
+}
+
 bool CapSensors::gnssFix() const {
   return gpsInitialized_ && gps_.location.isValid() &&
          gps_.location.age() < 10000;
@@ -131,6 +154,7 @@ void CapSensors::poll(EventPipeline& events) {
       observation.rssiDbm = static_cast<int16_t>(radio_.getRSSI());
       observation.snrDb = radio_.getSNR();
       observation.channel = -1; // RF frequency is profile-defined, not Wi-Fi channel.
+      annotate(observation);
       snprintf(observation.label, sizeof(observation.label), "sx1262");
       if (!events.enqueue(observation)) {
         Serial.println("CAP LORA event queue full; metadata dropped");
