@@ -13,6 +13,7 @@ class SessionStats {
     pipelineBase_ = pipelineDropped;
     bleBase_ = bleDropped;
     active_ = true;
+    started_ = true;
   }
   void finish(uint32_t now, uint32_t pipelineDropped, uint32_t bleDropped) {
     endedMs_ = now;
