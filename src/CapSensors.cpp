@@ -105,7 +105,7 @@ void CapSensors::begin() {
   }
 }
 
-void CapSensors::annotate(Observation& o) const {
+void CapSensors::annotate(Observation& o) {
   // Snapshot ONLY fresh GNSS fields at observation time. Position and
   // time have independent validity; stale or uninitialized fields stay null.
   // Reject implausible dates rather than fabricating UTC from millis().
