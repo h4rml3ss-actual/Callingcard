@@ -357,6 +357,8 @@ void serviceSurvey() {
   nextScanMs = millis() + kPauseMs;
 }
 
+} // namespace
+
 void setup() {
   Serial.begin(115200);
   auto cfg = M5.config();
