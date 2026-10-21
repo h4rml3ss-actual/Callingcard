@@ -170,34 +170,48 @@ void handleSessionKeys() {
   if (s && !priorS) stopSession();
   priorR = r; priorP = p; priorS = s;
 }
-bool scanWifiNext = true;
+enum class ScanMode { Idle, Wifi, Ble };
+ScanMode scanMode = ScanMode::Idle;
+uint32_t scanStartedMs = 0;
+uint32_t scanTimeouts = 0;
+uint32_t bleOverflow = 0;
 BLEScan* bleScanner = nullptr;
 callingcard::Observation latest[kMaxLines]{};
 int latestCount = 0;
-
+// BLE callbacks run in the BLE stack context; never touch EventPipeline,
+// Serial, GNSS, or display from that task. Transfer a fixed-size snapshot.
+portMUX_TYPE bleMux = portMUX_INITIALIZER_UNLOCKED;
+callingcard::Observation bleSamples[kMaxLines]{};
+uint8_t bleSampleCount = 0;
+volatile bool bleDone = false;
+volatile uint32_t bleResultCount = 0;
+void bleComplete(BLEScanResults results) {
+  portENTER_CRITICAL(&bleMux);
+  bleResultCount = results.getCount();
+  bleDone = true;
+  portEXIT_CRITICAL(&bleMux);
+}
 void addObservation(const callingcard::Observation& observation) {
-  if (latestCount < kMaxLines) {
-    latest[latestCount++] = observation;
-  }
+  if (latestCount < kMaxLines) latest[latestCount++] = observation;
   callingcard::Observation enriched = observation;
   cap.annotate(enriched);
   pipeline.enqueue(enriched);
 }
-
 class AdvertisedCallback : public BLEAdvertisedDeviceCallbacks {
  void onResult(BLEAdvertisedDevice device) override {
-   ++bleCallbacks;
-   if (latestCount >= kMaxLines) return;
    callingcard::Observation item{};
    item.kind = callingcard::Kind::BleAdvertisement;
    item.uptimeMs = millis();
    item.rssiDbm = device.getRSSI();
    item.channel = -1;
-   // Do not retain advertised device addresses by default.
    const std::string name = device.getName();
    snprintf(item.label, sizeof(item.label), "%s",
             name.empty() ? "<unnamed BLE>" : name.c_str());
-   addObservation(item);
+   portENTER_CRITICAL(&bleMux);
+   ++bleCallbacks;
+   if (bleSampleCount < kMaxLines) bleSamples[bleSampleCount++] = item;
+   else ++bleOverflow;
+   portEXIT_CRITICAL(&bleMux);
  }
 };
 AdvertisedCallback callback;
@@ -248,51 +262,99 @@ void drawStatus(const char* mode) {
   d.print("P pause/resume  S stop  R start");
 }
 
-void surveyWifi() {
+void beginSurvey() {
+  if (scanMode != ScanMode::Idle) return;
   latestCount = 0;
-  const uint32_t beginMs = millis();
-  // Synchronous survey intentionally has monitoring blind spots.
-  const int found = WiFi.scanNetworks(false, true);
-  wifiElapsedMs = millis() - beginMs;
-  if (found < 0) {
-    ++errorCount;
-    wifiCount = 0;
-  } else {
-    wifiCount = static_cast<uint32_t>(found);
-    for (int i = 0; i < found && latestCount < kMaxLines; ++i) {
-      callingcard::Observation item{};
-      item.kind = callingcard::Kind::WifiNetwork;
-      item.uptimeMs = millis();
-      item.rssiDbm = WiFi.RSSI(i);
-      item.channel = WiFi.channel(i);
-      String ssid = WiFi.SSID(i);
-      if (ssid.length() == 0) ssid = "<hidden>";
-      snprintf(item.label, sizeof(item.label), "%s", ssid.c_str());
-      addObservation(item);
+  scanStartedMs = millis();
+  ++scanNumber;
+  if (scanWifiNext) {
+    const int rc = WiFi.scanNetworks(true, true);
+    if (rc == WIFI_SCAN_FAILED) {
+      ++errorCount;
+      Serial.println("CYCLE mode=wifi start_failed=1");
+      nextScanMs = millis() + kPauseMs;
+      return;
     }
+    scanMode = ScanMode::Wifi;
+  } else {
+    portENTER_CRITICAL(&bleMux);
+    bleDone = false;
+    bleSampleCount = 0;
+    bleResultCount = 0;
+    bleCallbacks = 0;
+    portEXIT_CRITICAL(&bleMux);
+    if (!bleScanner->start(kBleScanSeconds, bleComplete, false)) {
+      ++errorCount;
+      Serial.println("CYCLE mode=ble start_failed=1");
+      nextScanMs = millis() + kPauseMs;
+      return;
+    }
+    scanMode = ScanMode::Ble;
   }
-  WiFi.scanDelete();
-  Serial.printf("CYCLE mode=wifi count=%lu duration_ms=%lu heap=%u errors=%lu\n",
-       static_cast<unsigned long>(wifiCount),
-       static_cast<unsigned long>(wifiElapsedMs), ESP.getFreeHeap(),
-       static_cast<unsigned long>(errorCount));
+  scanWifiNext = !scanWifiNext;
 }
-
-void surveyBle() {
-  latestCount = 0;
-  bleCallbacks = 0;
-  const uint32_t beginMs = millis();
-  // Scanning uses finite, bounded windows; no BLE peripheral connection yet.
-  BLEScanResults result = bleScanner->start(kBleScanSeconds, false);
-  bleElapsedMs = millis() - beginMs;
-  bleCount = static_cast<uint32_t>(result.getCount());
-  bleScanner->clearResults();
-  Serial.printf("CYCLE mode=ble unique=%lu callbacks=%lu duration_ms=%lu heap=%u errors=%lu\n",
-       static_cast<unsigned long>(bleCount),
-       static_cast<unsigned long>(bleCallbacks),
-       static_cast<unsigned long>(bleElapsedMs), ESP.getFreeHeap(),
-       static_cast<unsigned long>(errorCount));
-}
+void serviceSurvey() {
+  if (scanMode == ScanMode::Wifi) {
+    const int found = WiFi.scanComplete();
+    if (found == WIFI_SCAN_RUNNING) {
+      if (millis() - scanStartedMs < 12000) return;
+      ++scanTimeouts;
+      ++errorCount;
+      Serial.println("CYCLE mode=wifi timeout=1");
+    } else if (found < 0) {
+      ++errorCount;
+    } else {
+      wifiCount = static_cast<uint32_t>(found);
+      for (int i = 0; i < found && latestCount < kMaxLines; ++i) {
+        callingcard::Observation item{};
+        item.kind = callingcard::Kind::WifiNetwork;
+        item.uptimeMs = millis();
+        item.rssiDbm = WiFi.RSSI(i);
+        item.channel = WiFi.channel(i);
+        String ssid = WiFi.SSID(i);
+        snprintf(item.label, sizeof(item.label), "%s",
+                 ssid.length() ? ssid.c_str() : "<hidden>");
+        addObservation(item);
+      }
+    }
+    wifiElapsedMs = millis() - scanStartedMs;
+    WiFi.scanDelete();
+    Serial.printf("CYCLE mode=wifi count=%lu duration_ms=%lu timeouts=%lu heap=%u errors=%lu\n",
+                  (unsigned long)wifiCount, (unsigned long)wifiElapsedMs,
+                  (unsigned long)scanTimeouts, ESP.getFreeHeap(), (unsigned long)errorCount);
+  } else if (scanMode == ScanMode::Ble) {
+    callingcard::Observation snapshot[kMaxLines]{};
+    uint8_t count = 0;
+    bool complete = false;
+    uint32_t total = 0;
+    portENTER_CRITICAL(&bleMux);
+    complete = bleDone;
+    if (complete) {
+      count = bleSampleCount;
+      total = bleResultCount;
+      for (uint8_t i = 0; i < count; ++i) snapshot[i] = bleSamples[i];
+      bleDone = false;
+    }
+    portEXIT_CRITICAL(&bleMux);
+    if (!complete) {
+      if (millis() - scanStartedMs < 9000) return;
+      ++scanTimeouts;
+      ++errorCount;
+      bleScanner->stop();
+      Serial.println("CYCLE mode=ble timeout=1");
+    } else {
+      bleCount = total;
+      for (uint8_t i = 0; i < count; ++i) addObservation(snapshot[i]);
+    }
+    bleElapsedMs = millis() - scanStartedMs;
+    bleScanner->clearResults(); // Only after callback completes, in loop context.
+    Serial.printf("CYCLE mode=ble unique=%lu callbacks=%lu duration_ms=%lu overflow=%lu timeouts=%lu heap=%u errors=%lu\n",
+                  (unsigned long)bleCount, (unsigned long)bleCallbacks,
+                  (unsigned long)bleElapsedMs, (unsigned long)bleOverflow,
+                  (unsigned long)scanTimeouts, ESP.getFreeHeap(), (unsigned long)errorCount);
+  } else return;
+  scanMode = ScanMode::Idle;
+  nextScanMs = millis() + kPauseMs;
 }
 
 void setup() {
@@ -344,13 +406,8 @@ void loop() {
     cap.logStatus();
     nextCapLogMs = millis() + 10000;
   }
-  if (static_cast<int32_t>(millis() - nextScanMs) >= 0) {
-    ++scanNumber;
-    if (scanWifiNext) surveyWifi();
-    else surveyBle();
-    lastScanEndMs = millis();
-    scanWifiNext = !scanWifiNext;
-    nextScanMs = lastScanEndMs + kPauseMs;
-  }
-  delay(30);
+  serviceSurvey();
+  if (scanMode == ScanMode::Idle &&
+      static_cast<int32_t>(millis() - nextScanMs) >= 0) beginSurvey();
+  delay(10);
 }
