@@ -105,6 +105,14 @@ void CapSensors::begin() {
   }
 }
 
+bool CapSensors::gnssUtc(char* buffer, size_t size) {
+  Observation snapshot{};
+  annotate(snapshot);
+  if (!snapshot.hasUtc || size < sizeof(snapshot.utc)) return false;
+  snprintf(buffer, size, "%s", snapshot.utc);
+  return true;
+}
+
 void CapSensors::annotate(Observation& o) {
   // Snapshot ONLY fresh GNSS fields at observation time. Position and
   // time have independent validity; stale or uninitialized fields stay null.

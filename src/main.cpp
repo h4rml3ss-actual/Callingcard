@@ -14,6 +14,8 @@
 namespace {
 constexpr uint32_t kPauseMs = 2500;
 constexpr uint32_t kBleScanSeconds = 4;
+constexpr uint32_t kDisplayRefreshMs = 750;
+uint32_t nextDisplayMs = 0;
 constexpr int kMaxLines = 5;
 uint32_t scanNumber = 0;
 uint32_t nextScanMs = 0;
@@ -201,30 +203,49 @@ class AdvertisedCallback : public BLEAdvertisedDeviceCallbacks {
 AdvertisedCallback callback;
 
 void drawStatus(const char* mode) {
+  // Compact 240x135 screen; only redraw on a timer or state change.
   auto& d = M5Cardputer.Display;
+  char utc[25] = {};
+  const bool hasUtc = cap.gnssUtc(utc, sizeof(utc));
+  const uint32_t bytes = sessionFile ? sessionFile.size() : lastSessionBytes;
+  const char* file = strrchr(sessionPath, '/');
+  file = file ? file + 1 : (sessionPath[0] ? sessionPath : "-");
+
   d.fillScreen(TFT_BLACK);
   d.setTextFont(1);
   d.setTextSize(1);
   d.setTextColor(TFT_GREEN, TFT_BLACK);
-  d.setCursor(3, 2);
-  d.println("CALLINGCARD  ADV");
+  d.setCursor(4, 3);
+  d.print("CALLINGCARD ADV");
+  d.setCursor(165, 3);
+  d.print(stateName());
+  d.drawFastHLine(4, 15, 232, TFT_DARKGREY);
+
   d.setTextColor(TFT_WHITE, TFT_BLACK);
-  d.printf("%s #%lu\n", mode, static_cast<unsigned long>(scanNumber));
-  d.printf("WIFI:%lu BLE:%lu\n", static_cast<unsigned long>(wifiCount),
-           static_cast<unsigned long>(bleCount));
-  d.printf("W:%lums B:%lums\n", static_cast<unsigned long>(wifiElapsedMs),
-           static_cast<unsigned long>(bleElapsedMs));
-  d.printf("Heap:%u Err:%lu\n", ESP.getFreeHeap(),
-           static_cast<unsigned long>(errorCount));
-  for (int i = 0; i < latestCount; ++i) {
-    d.printf("%c %-15.15s %4d\n",
-            latest[i].kind == callingcard::Kind::WifiNetwork ? 'W' :
-            latest[i].kind == callingcard::Kind::BleAdvertisement ? 'B' : 'L',
-            latest[i].label, latest[i].rssiDbm);
-  }
-  d.printf("Q:%u Drop:%lu\n", pipeline.queued(), static_cast<unsigned long>(pipeline.dropped()));
-  d.printf("CAP:%s E:%d\n", cap.failureStage(), cap.radioError());
-  d.printf("GPS:%s LORA:%s RX:%lu\n", cap.gnssFix() ? "FIX" : "NOFIX", cap.radioReady() ? "OK" : "ERR", static_cast<unsigned long>(cap.packetCount()));
+  d.setCursor(4, 21);
+  d.printf("WIFI %3lu   BLE %3lu   LORA %4lu",
+           (unsigned long)wifiCount, (unsigned long)bleCount,
+           (unsigned long)cap.packetCount());
+  d.setCursor(4, 34);
+  d.printf("GPS: %s   SAT: %lu",
+           cap.gnssFix() ? "FIX" : "NO FIX",
+           (unsigned long)cap.satellites());
+  d.setCursor(4, 47);
+  d.printf("UTC: %s", hasUtc ? utc : "--");
+  d.setCursor(4, 60);
+  d.printf("SD: %.18s", file);
+  d.setCursor(4, 73);
+  d.printf("DATA: %lu B  SD ERR: %lu",
+           (unsigned long)bytes, (unsigned long)sdErrors);
+  d.setCursor(4, 86);
+  d.printf("PIPE: %u queued / %lu dropped",
+           pipeline.queued(), (unsigned long)pipeline.dropped());
+  d.setCursor(4, 99);
+  d.printf("RADIO: %s  HEAP: %lu",
+           cap.radioReady() ? "RX" : "ERR", (unsigned long)ESP.getFreeHeap());
+  d.drawFastHLine(4, 112, 232, TFT_DARKGREY);
+  d.setCursor(4, 117);
+  d.print("P pause/resume  S stop  R start");
 }
 
 void surveyWifi() {
@@ -292,6 +313,7 @@ void setup() {
   beginStorage();
   Serial.println("Callingcard PR5 event pipeline boot");
   drawStatus("READY");
+  nextDisplayMs = millis() + kDisplayRefreshMs;
 }
 
 void loop() {
@@ -300,6 +322,10 @@ void loop() {
   cap.poll(pipeline);
   pipeline.drainTo(Serial, 8, sessionState == SessionState::Recording ? static_cast<Print*>(&sessionFile) : nullptr);
   serviceStorage();
+  if ((int32_t)(millis() - nextDisplayMs) >= 0) {
+    drawStatus("STATUS");
+    nextDisplayMs = millis() + kDisplayRefreshMs;
+  }
   if ((int32_t)(millis() - nextSdLogMs) >= 0) {
     Serial.printf("SD status=%s path=%s bytes=%lu errors=%lu\n",
                   stateName(),
@@ -320,13 +346,11 @@ void loop() {
   }
   if (static_cast<int32_t>(millis() - nextScanMs) >= 0) {
     ++scanNumber;
-    drawStatus(scanWifiNext ? "SCANNING WIFI" : "SCANNING BLE");
     if (scanWifiNext) surveyWifi();
     else surveyBle();
     lastScanEndMs = millis();
     scanWifiNext = !scanWifiNext;
     nextScanMs = lastScanEndMs + kPauseMs;
-    drawStatus("SURVEY COMPLETE");
   }
   delay(30);
 }
