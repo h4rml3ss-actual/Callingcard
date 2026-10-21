@@ -10,6 +10,7 @@
 #include "Observation.h"
 #include "CapSensors.h"
 #include "EventPipeline.h"
+#include "SessionStats.h"
 
 namespace {
 constexpr uint32_t kPauseMs = 2500;
@@ -29,6 +30,8 @@ uint32_t lastScanEndMs = 0;
 uint32_t nextCapLogMs = 0;
 callingcard::CapSensors cap;
 callingcard::EventPipeline pipeline;
+callingcard::SessionStats sessionStats;
+uint32_t bleLossForSummary = 0;
 uint32_t nextPipelineLogMs = 0;
 // Cardputer ADV and Cap LoRa-1262 share SPI CLK=40, MISO=39,
 // MOSI=14; microSD CS=12 and SX1262 CS=5. All SPI users run on main
@@ -70,6 +73,10 @@ void storageError(const char* reason) {
   Serial.printf("SD ERROR reason=%s\\n", reason);
   closeSession();
   sessionState = SessionState::Error;
+  if (sessionStats.hasSession()) {
+    sessionStats.finish(millis(), pipeline.dropped(), bleLossForSummary);
+    sessionStats.print(Serial, millis(), pipeline.dropped(), bleLossForSummary, lastSessionBytes, sessionPath);
+  }
 }
 bool createSession() {
   if (!sdMounted) {
@@ -95,6 +102,7 @@ bool createSession() {
   priorMirrorErrors = pipeline.mirrorErrors();
   nextFlushMs = millis() + kFlushEveryMs;
   sessionState = SessionState::Recording;
+  sessionStats.begin(millis(), pipeline.dropped(), bleLossForSummary);
   Serial.printf("SD status=RECORDING path=%s\\n", sessionPath);
   return true;
 }
@@ -130,6 +138,8 @@ void stopSession() {
   if (sessionState != SessionState::Recording && sessionState != SessionState::Paused) return;
   closeSession();
   sessionState = SessionState::Stopped;
+  sessionStats.finish(millis(), pipeline.dropped(), bleLossForSummary);
+  sessionStats.print(Serial, millis(), pipeline.dropped(), bleLossForSummary, lastSessionBytes, sessionPath);
   Serial.printf("SD status=STOPPED path=%s bytes=%lu\\n",
                 sessionPath, (unsigned long)lastSessionBytes);
 }
@@ -143,6 +153,8 @@ void serviceStorage() {
   if (sessionFile.size() >= kMaxSessionBytes) {
     closeSession();
     sessionState = SessionState::Limit;
+    sessionStats.finish(millis(), pipeline.dropped(), bleLossForSummary);
+    sessionStats.print(Serial, millis(), pipeline.dropped(), bleLossForSummary, lastSessionBytes, sessionPath);
     Serial.printf("SD status=LIMIT path=%s bytes=%lu\\n",
                   sessionPath, (unsigned long)lastSessionBytes);
     return;
@@ -284,6 +296,26 @@ void drawStatus(const char* mode) {
   d.drawFastHLine(4, 15, 232, TFT_DARKGREY);
 
   d.setTextColor(TFT_WHITE, TFT_BLACK);
+  if (sessionState == SessionState::Stopped || sessionState == SessionState::Limit) {
+    d.setCursor(4, 21);
+    d.printf("SESSION SUMMARY   %lus", (unsigned long)(sessionStats.elapsed(millis())/1000));
+    d.setCursor(4, 36);
+    d.printf("WIFI %lu  BLE %lu  LORA %lu",
+             (unsigned long)sessionStats.count(0),
+             (unsigned long)sessionStats.count(1),
+             (unsigned long)sessionStats.count(2));
+    d.setCursor(4, 51);
+    d.printf("SAVED %lu  BYTES %lu",
+             (unsigned long)sessionStats.saved(), (unsigned long)lastSessionBytes);
+    d.setCursor(4, 66);
+    d.printf("PIPE LOST %lu", (unsigned long)pipeline.dropped());
+    d.setCursor(4, 81);
+    d.printf("FILE %.22s", file);
+    d.drawFastHLine(4, 112, 232, TFT_DARKGREY);
+    d.setCursor(4, 117);
+    d.print("R new session");
+    return;
+  }
   d.setCursor(4, 21);
   d.printf("WIFI %3lu   BLE %3lu   LORA %4lu",
            (unsigned long)wifiCount, (unsigned long)bleCount,
@@ -430,7 +462,9 @@ void loop() {
   cap.poll(pipeline);
   refreshGnssAnchor();
   drainBleSamples();
-  pipeline.drainTo(Serial, 8, sessionState == SessionState::Recording ? static_cast<Print*>(&sessionFile) : nullptr);
+  bleLossForSummary = blePrequeueDropped;
+  pipeline.drainTo(Serial, 8, sessionState == SessionState::Recording ? static_cast<Print*>(&sessionFile) : nullptr,
+                   sessionStats.hasSession() && (sessionState == SessionState::Recording || sessionState == SessionState::Paused) ? &sessionStats : nullptr);
   serviceStorage();
   if ((int32_t)(millis() - nextDisplayMs) >= 0) {
     drawStatus("STATUS");
