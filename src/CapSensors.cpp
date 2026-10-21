@@ -29,7 +29,7 @@ void CapSensors::begin() {
     for (uint8_t address = 0x08; address < 0x78; ++address) {
       if (!detectedI2cAddresses_[address]) continue;
       ++detectedI2cCount_;
-      Serial.printf("CAP I2C found=0x%02X\\n", address);
+      Serial.printf("CAP I2C found=0x%02X\n", address);
     }
     expanderAck_ = detectedI2cAddresses_[0x43];
     if (expanderAck_) {
@@ -41,7 +41,7 @@ void CapSensors::begin() {
       }
     }
   }
-  Serial.printf("CAP EXPANDER i2c=%d ack_0x43=%d driver=%d mode=%s\\n",
+  Serial.printf("CAP EXPANDER i2c=%d ack_0x43=%d driver=%d mode=%s\n",
                 i2cOk_, expanderAck_, expanderOk_,
                 expanderOk_ ? "P0_HIGH" : "UNVERIFIED");
   stage_ = "SX1262_INIT";
@@ -57,7 +57,7 @@ void CapSensors::begin() {
     // RadioLib also enables SX126x DIO2 RF-switch control during begin;
     // request it explicitly and report the result for board comparison.
     const int16_t dio2State = radio_.setDio2AsRfSwitch(true);
-    Serial.printf("CAP DIO2 RF switch status=%d\\n", dio2State);
+    Serial.printf("CAP DIO2 RF switch status=%d\n", dio2State);
     if (dio2State != RADIOLIB_ERR_NONE) {
       radioState_ = dio2State;
       stage_ = "DIO2_SWITCH";
