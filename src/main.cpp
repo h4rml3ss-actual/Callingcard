@@ -182,8 +182,38 @@ int latestCount = 0;
 // BLE callbacks run in the BLE stack context; never touch EventPipeline,
 // Serial, GNSS, or display from that task. Transfer a fixed-size snapshot.
 portMUX_TYPE bleMux = portMUX_INITIALIZER_UNLOCKED;
-callingcard::Observation bleSamples[kMaxLines]{};
-uint8_t bleSampleCount = 0;
+constexpr uint8_t kBleQueueCapacity = 48;
+callingcard::Observation bleSamples[kBleQueueCapacity]{};
+uint8_t bleHead = 0, bleTail = 0, bleSampleCount = 0;
+uint32_t blePrequeueDropped = 0;
+callingcard::Observation gnssAnchor{};
+uint32_t gnssAnchorMs = 0;
+// GNSS anchor refreshed by main loop; callbacks copy without accessing TinyGPSPlus.
+void refreshGnssAnchor() {
+  callingcard::Observation snapshot{};
+  cap.annotate(snapshot);
+  portENTER_CRITICAL(&bleMux);
+  gnssAnchor = snapshot;
+  gnssAnchorMs = millis();
+  portEXIT_CRITICAL(&bleMux);
+}
+void drainBleSamples(uint8_t maximum = 8) {
+  for (uint8_t i = 0; i < maximum; ++i) {
+    callingcard::Observation snapshot{};
+    bool hasSample = false;
+    portENTER_CRITICAL(&bleMux);
+    if (bleSampleCount) {
+      snapshot = bleSamples[bleHead];
+      bleHead = (bleHead + 1) % kBleQueueCapacity;
+      --bleSampleCount;
+      hasSample = true;
+    }
+    portEXIT_CRITICAL(&bleMux);
+    if (!hasSample) return;
+    if (latestCount < kMaxLines) latest[latestCount++] = snapshot;
+    pipeline.enqueue(snapshot); // Already tagged at callback time, never re-annotate.
+  }
+}
 volatile bool bleDone = false;
 volatile uint32_t bleResultCount = 0;
 void bleComplete(BLEScanResults results) {
@@ -210,8 +240,25 @@ class AdvertisedCallback : public BLEAdvertisedDeviceCallbacks {
             name.empty() ? "<unnamed BLE>" : name.c_str());
    portENTER_CRITICAL(&bleMux);
    ++bleCallbacks;
-   if (bleSampleCount < kMaxLines) bleSamples[bleSampleCount++] = item;
-   else ++bleOverflow;
+   // The main loop publishes a recent GNSS snapshot. Do not query TinyGPS
+   // or attach scan-completion location to this older advertisement.
+   const uint32_t anchorAge = item.uptimeMs - gnssAnchorMs;
+   if (anchorAge <= 500) {
+     item.hasUtc = gnssAnchor.hasUtc;
+     if (item.hasUtc) snprintf(item.utc, sizeof(item.utc), "%s", gnssAnchor.utc);
+     item.hasPosition = gnssAnchor.hasPosition;
+     if (item.hasPosition) {
+       item.latitude = gnssAnchor.latitude;
+       item.longitude = gnssAnchor.longitude;
+     }
+   }
+   if (bleSampleCount < kBleQueueCapacity) {
+     bleSamples[bleTail] = item;
+     bleTail = (bleTail + 1) % kBleQueueCapacity;
+     ++bleSampleCount;
+   } else {
+     ++blePrequeueDropped;
+   }
    portEXIT_CRITICAL(&bleMux);
  }
 };
@@ -280,7 +327,7 @@ void beginSurvey() {
   } else {
     portENTER_CRITICAL(&bleMux);
     bleDone = false;
-    bleSampleCount = 0;
+    bleHead = bleTail = bleSampleCount = 0;
     bleResultCount = 0;
     bleCallbacks = 0;
     portEXIT_CRITICAL(&bleMux);
@@ -324,16 +371,12 @@ void serviceSurvey() {
                   (unsigned long)wifiCount, (unsigned long)wifiElapsedMs,
                   (unsigned long)scanTimeouts, ESP.getFreeHeap(), (unsigned long)errorCount);
   } else if (scanMode == ScanMode::Ble) {
-    callingcard::Observation snapshot[kMaxLines]{};
-    uint8_t count = 0;
     bool complete = false;
     uint32_t total = 0;
     portENTER_CRITICAL(&bleMux);
     complete = bleDone;
     if (complete) {
-      count = bleSampleCount;
       total = bleResultCount;
-      for (uint8_t i = 0; i < count; ++i) snapshot[i] = bleSamples[i];
       bleDone = false;
     }
     portEXIT_CRITICAL(&bleMux);
@@ -345,13 +388,13 @@ void serviceSurvey() {
       Serial.println("CYCLE mode=ble timeout=1");
     } else {
       bleCount = total;
-      for (uint8_t i = 0; i < count; ++i) addObservation(snapshot[i]);
+      drainBleSamples(kBleQueueCapacity);
     }
     bleElapsedMs = millis() - scanStartedMs;
     bleScanner->clearResults(); // Only after callback completes, in loop context.
-    Serial.printf("CYCLE mode=ble unique=%lu callbacks=%lu duration_ms=%lu overflow=%lu timeouts=%lu heap=%u errors=%lu\n",
+    Serial.printf("CYCLE mode=ble unique=%lu callbacks=%lu duration_ms=%lu prequeue_dropped=%lu timeouts=%lu heap=%u errors=%lu\n",
                   (unsigned long)bleCount, (unsigned long)bleCallbacks,
-                  (unsigned long)bleElapsedMs, (unsigned long)bleOverflow,
+                  (unsigned long)bleElapsedMs, (unsigned long)blePrequeueDropped,
                   (unsigned long)scanTimeouts, ESP.getFreeHeap(), (unsigned long)errorCount);
   } else return;
   scanMode = ScanMode::Idle;
@@ -385,6 +428,8 @@ void loop() {
   M5Cardputer.update();
   handleSessionKeys();
   cap.poll(pipeline);
+  refreshGnssAnchor();
+  drainBleSamples();
   pipeline.drainTo(Serial, 8, sessionState == SessionState::Recording ? static_cast<Print*>(&sessionFile) : nullptr);
   serviceStorage();
   if ((int32_t)(millis() - nextDisplayMs) >= 0) {
