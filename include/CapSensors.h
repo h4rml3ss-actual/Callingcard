@@ -17,7 +17,7 @@ class CapSensors {
   void poll(EventPipeline& events);
   void logStatus();
   bool gnssFix() const;
-  void annotate(Observation& observation) const;
+  void annotate(Observation& observation);
   bool radioReady() const { return radioState_ == RADIOLIB_ERR_NONE; }
   uint32_t packetCount() const { return packets_; }
   const char* failureStage() const { return stage_; }
