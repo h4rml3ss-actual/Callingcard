@@ -11,6 +11,7 @@
 #include "CapSensors.h"
 #include "EventPipeline.h"
 #include "SessionStats.h"
+#include "SessionHistory.h"
 
 namespace {
 constexpr uint32_t kPauseMs = 2500;
@@ -31,6 +32,8 @@ uint32_t nextCapLogMs = 0;
 callingcard::CapSensors cap;
 callingcard::EventPipeline pipeline;
 callingcard::SessionStats sessionStats;
+callingcard::SessionHistory history;
+bool historyVisible = false;
 uint32_t bleLossForSummary = 0;
 uint32_t nextPipelineLogMs = 0;
 // Cardputer ADV and Cap LoRa-1262 share SPI CLK=40, MISO=39,
@@ -167,9 +170,23 @@ void serviceStorage() {
 void handleSessionKeys() {
   // Isolated key-down edges; scanning keeps running through every state.
   static bool priorR = false, priorP = false, priorS = false;
+  static bool priorH = false, priorJ = false, priorK = false;
   const bool r = M5Cardputer.Keyboard.isKeyPressed('r');
   const bool p = M5Cardputer.Keyboard.isKeyPressed('p');
   const bool s = M5Cardputer.Keyboard.isKeyPressed('s');
+  const bool h = M5Cardputer.Keyboard.isKeyPressed('h');
+  const bool j = M5Cardputer.Keyboard.isKeyPressed('j');
+  const bool k = M5Cardputer.Keyboard.isKeyPressed('k');
+  if (h && !priorH) {
+    historyVisible = !historyVisible && sdMounted;
+    if (historyVisible) history.begin();
+    nextDisplayMs = 0;
+  }
+  if (historyVisible) {
+    if (j && !priorJ) history.move(-1);
+    if (k && !priorK) history.move(1);
+  }
+  priorH = h; priorJ = j; priorK = k;
   if (r && !priorR) {
     if (sessionState == SessionState::Paused) resumeSession();
     else if (sessionState == SessionState::Stopped || sessionState == SessionState::Limit)
@@ -286,6 +303,32 @@ void drawStatus(const char* mode) {
   file = file ? file + 1 : (sessionPath[0] ? sessionPath : "-");
 
   d.fillScreen(TFT_BLACK);
+  if (historyVisible) {
+    d.setTextFont(1);
+    d.setTextSize(1);
+    d.setTextColor(TFT_GREEN, TFT_BLACK);
+    d.setCursor(4, 3);
+    d.print("CALLINGCARD / HISTORY");
+    d.setTextColor(TFT_WHITE, TFT_BLACK);
+    d.setCursor(4, 21);
+    if (history.scanning()) d.printf("Indexing %u/1000...", history.progress());
+    else d.printf("Last %u closed sessions", history.count());
+    const auto* entry = history.selected();
+    d.setCursor(4, 40);
+    if (entry) {
+      d.printf("Session S%03u.JSONL", entry->number);
+      d.setCursor(4, 57);
+      d.printf("File size: %lu bytes", (unsigned long)entry->bytes);
+      d.setCursor(4, 74);
+      d.printf("Record %u of %u", history.selection()+1, history.count());
+    } else d.print(history.scanning() ? "Finding prior recordings..." : "No closed sessions found");
+    d.setCursor(4, 94);
+    d.printf("Read errors: %lu", (unsigned long)history.errors());
+    d.drawFastHLine(4, 112, 232, TFT_DARKGREY);
+    d.setCursor(4, 117);
+    d.print("J prev K next H back");
+    return;
+  }
   d.setTextFont(1);
   d.setTextSize(1);
   d.setTextColor(TFT_GREEN, TFT_BLACK);
@@ -313,7 +356,7 @@ void drawStatus(const char* mode) {
     d.printf("FILE %.22s", file);
     d.drawFastHLine(4, 112, 232, TFT_DARKGREY);
     d.setCursor(4, 117);
-    d.print("R new session");
+    d.print("R new session   H history");
     return;
   }
   d.setCursor(4, 21);
@@ -339,7 +382,7 @@ void drawStatus(const char* mode) {
            cap.radioReady() ? "RX" : "ERR", (unsigned long)ESP.getFreeHeap());
   d.drawFastHLine(4, 112, 232, TFT_DARKGREY);
   d.setCursor(4, 117);
-  d.print("P pause/resume  S stop  R start");
+  d.print("P pause S stop R start H history");
 }
 
 void beginSurvey() {
@@ -466,6 +509,7 @@ void loop() {
   pipeline.drainTo(Serial, 8, sessionState == SessionState::Recording ? static_cast<Print*>(&sessionFile) : nullptr,
                    sessionStats.hasSession() && (sessionState == SessionState::Recording || sessionState == SessionState::Paused) ? &sessionStats : nullptr);
   serviceStorage();
+  if (historyVisible && sdMounted) history.tick(sessionFile ? sessionPath : nullptr);
   if ((int32_t)(millis() - nextDisplayMs) >= 0) {
     drawStatus("STATUS");
     nextDisplayMs = millis() + kDisplayRefreshMs;
