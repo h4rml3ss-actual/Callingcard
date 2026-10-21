@@ -24,10 +24,15 @@ class SessionHistory {
       if (!f) { ++errors_; continue; }
       const uint32_t bytes = f.size();
       f.close();
-      if (count_ < kCapacity) entries_[count_++] = {nextId_, bytes};
+      if (count_ < kCapacity) {
+        entries_[count_].number = nextId_;
+        entries_[count_].bytes = bytes;
+        ++count_;
+      }
       else {
         for (uint8_t i = 1; i < kCapacity; ++i) entries_[i-1] = entries_[i];
-        entries_[kCapacity-1] = {nextId_, bytes};
+        entries_[kCapacity-1].number = nextId_;
+        entries_[kCapacity-1].bytes = bytes;
       }
     }
     if (nextId_ == 1000) {
