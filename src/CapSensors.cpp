@@ -1,4 +1,5 @@
 #include "CapSensors.h"
+#include "EventPipeline.h"
 
 namespace callingcard {
 volatile bool CapSensors::rxFlag_ = false;
@@ -109,7 +110,7 @@ bool CapSensors::gnssFix() const {
          gps_.location.age() < 10000;
 }
 
-void CapSensors::poll() {
+void CapSensors::poll(EventPipeline& events) {
   // Max bytes per pass to preserve main loop responsiveness.
   for (unsigned i = 0; i < 256 && gpsUart_.available(); ++i) {
     gps_.encode(gpsUart_.read());
@@ -123,7 +124,18 @@ void CapSensors::poll() {
     int rc = radio_.readData(payload);
     if (rc == RADIOLIB_ERR_NONE) {
       ++packets_;
-      // Avoid collecting arbitrary payload content; report radio metadata only.
+      // Queue metadata only; never place the received payload in telemetry.
+      Observation observation{};
+      observation.kind = Kind::LoRaPacket;
+      observation.uptimeMs = millis();
+      observation.rssiDbm = static_cast<int16_t>(radio_.getRSSI());
+      observation.snrDb = radio_.getSNR();
+      observation.channel = -1; // RF frequency is profile-defined, not Wi-Fi channel.
+      snprintf(observation.label, sizeof(observation.label), "sx1262");
+      if (!events.enqueue(observation)) {
+        Serial.println("CAP LORA event queue full; metadata dropped");
+      }
+      // Retain existing diagnostic output.
       Serial.printf("CAP LORA RX count=%lu rssi=%.1f snr=%.1f\n",
                     static_cast<unsigned long>(packets_),
                     radio_.getRSSI(), radio_.getSNR());

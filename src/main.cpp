@@ -74,7 +74,8 @@ void drawStatus(const char* mode) {
            static_cast<unsigned long>(errorCount));
   for (int i = 0; i < latestCount; ++i) {
     d.printf("%c %-15.15s %4d\n",
-            latest[i].kind == callingcard::Kind::WifiNetwork ? 'W' : 'B',
+            latest[i].kind == callingcard::Kind::WifiNetwork ? 'W' :
+            latest[i].kind == callingcard::Kind::BleAdvertisement ? 'B' : 'L',
             latest[i].label, latest[i].rssiDbm);
   }
   d.printf("Q:%u Drop:%lu\n", pipeline.queued(), static_cast<unsigned long>(pipeline.dropped()));
@@ -150,7 +151,7 @@ void setup() {
 
 void loop() {
   M5Cardputer.update();
-  cap.poll();
+  cap.poll(pipeline);
   pipeline.drainTo(Serial, 8);
   if (static_cast<int32_t>(millis() - nextPipelineLogMs) >= 0) {
     Serial.printf("PIPE queue=%u emitted=%lu dropped=%lu heap=%u\n",
