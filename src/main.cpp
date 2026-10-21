@@ -171,6 +171,7 @@ void handleSessionKeys() {
   priorR = r; priorP = p; priorS = s;
 }
 enum class ScanMode { Idle, Wifi, Ble };
+bool scanWifiNext = true; // Alternate Wi-Fi and BLE scans, starting with Wi-Fi.
 ScanMode scanMode = ScanMode::Idle;
 uint32_t scanStartedMs = 0;
 uint32_t scanTimeouts = 0;
