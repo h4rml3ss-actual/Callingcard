@@ -17,41 +17,34 @@ void CapSensors::begin() {
   gpsUart_.begin(115200, SERIAL_8N1, 15, 13);
   gpsInitialized_ = true;
 
-  // Cap-1262 requires IO-expander pin P0 high to enable RF antenna switch.
-  // Fail closed when expander is unavailable; do not assume a different Cap.
-  if (!m5::In_I2C.begin(I2C_NUM_0, 8, 9)) {
-    Serial.println("CAP I2C: initialization failed; LoRa disabled");
-    return;
+  // The board's working Meshtastic firmware demonstrated SX1262 SPI
+  // initialization and RX/TX even though its I2C probe did not list 0x43.
+  // Probe the expander independently: absence must not prevent a *receive-only*
+  // SPI bring-up. RF antenna switch effectiveness remains unverified.
+  stage_ = "I2C";
+  i2cOk_ = m5::In_I2C.begin(I2C_NUM_0, 8, 9);
+  if (i2cOk_) {
+    stage_ = "I2C_PROBE";
+    m5::In_I2C.scanID(detectedI2cAddresses_);
+    for (uint8_t address = 0x08; address < 0x78; ++address) {
+      if (!detectedI2cAddresses_[address]) continue;
+      ++detectedI2cCount_;
+      Serial.printf("CAP I2C found=0x%02X\\n", address);
+    }
+    expanderAck_ = detectedI2cAddresses_[0x43];
+    if (expanderAck_) {
+      expanderOk_ = expander_.begin();
+      if (expanderOk_) {
+        expander_.setDirection(0, true);
+        expander_.setHighImpedance(0, false);
+        expander_.digitalWrite(0, true);
+      }
+    }
   }
-  i2cOk_ = true;
-  stage_ = "I2C_PROBE";
-  // Use M5Unified's existing I2C bus, not a second Wire instance which
-  // could reconfigure the controller while other M5 peripherals are active.
-  // A one-time bus scan avoids repeatedly probing active I2C peripherals.
-  // Preserve startup scan for monitoring after USB CDC reconnect.
-  m5::In_I2C.scanID(detectedI2cAddresses_);
-  for (uint8_t address = 0x08; address < 0x78; ++address) {
-    if (!detectedI2cAddresses_[address]) continue;
-    ++detectedI2cCount_;
-    Serial.printf("CAP I2C found=0x%02X\n", address);
-  }
-  expanderAck_ = detectedI2cAddresses_[0x43];
-  Serial.printf("CAP I2C probe target=0x43 ack=%d devices=%u\n",
-                expanderAck_, detectedI2cCount_);
-  stage_ = "EXPANDER";
-  if (!expanderAck_) {
-    Serial.println("CAP I2C: 0x43 did not ACK; LoRa disabled");
-    return;
-  }
-  if (!expander_.begin()) {
-    Serial.println("CAP IO expander absent; LoRa disabled");
-    return;
-  }
-  expanderOk_ = true;
+  Serial.printf("CAP EXPANDER i2c=%d ack_0x43=%d driver=%d mode=%s\\n",
+                i2cOk_, expanderAck_, expanderOk_,
+                expanderOk_ ? "P0_HIGH" : "UNVERIFIED");
   stage_ = "SX1262_INIT";
-  expander_.setDirection(0, true);
-  expander_.setHighImpedance(0, false);
-  expander_.digitalWrite(0, true);
 
   // Explicit SPI pins shared with Cardputer SD. SD operations must be serialized.
   SPI.begin(40, 39, 14, 5);
@@ -61,6 +54,15 @@ void CapSensors::begin() {
   initCode_ = radioState_;
   Serial.printf("CAP SX1262 init status=%d\n", radioState_);
   if (radioReady()) {
+    // RadioLib also enables SX126x DIO2 RF-switch control during begin;
+    // request it explicitly and report the result for board comparison.
+    const int16_t dio2State = radio_.setDio2AsRfSwitch(true);
+    Serial.printf("CAP DIO2 RF switch status=%d\\n", dio2State);
+    if (dio2State != RADIOLIB_ERR_NONE) {
+      radioState_ = dio2State;
+      stage_ = "DIO2_SWITCH";
+      return;
+    }
     stage_ = "START_RX";
     radio_.setPacketReceivedAction(onPacket);
     const int state = radio_.startReceive();
