@@ -50,17 +50,17 @@ void EventPipeline::printEvent(Print& out, const Observation& o) {
     out.print(F("\",\"snr_db\":"));
     out.print(o.snrDb, 1);
   }
-  out.print(F("\\",\\\"utc\\\":"));
+  out.print(F("\",\"utc\":"));
   if (o.hasUtc) {
     out.print('"');
     out.print(o.utc);
     out.print('"');
   } else out.print(F("null"));
-  out.print(F(",\\\"position\\\":"));
+  out.print(F(",\"position\":"));
   if (o.hasPosition) {
-    out.print(F("{\\\"lat\\\":"));
+    out.print(F("{\"lat\":"));
     out.print(o.latitude, 6);
-    out.print(F(",\\\"lon\\\":"));
+    out.print(F(",\"lon\":"));
     out.print(o.longitude, 6);
     out.print('}');
   } else out.print(F("null"));
