@@ -88,18 +88,22 @@ class FixedLine : public Print {
   bool overflow = false;
 };
 }
-void EventPipeline::drainTo(Print& output, uint8_t maximum, Print* mirror) {
+void EventPipeline::drainTo(Print& output, uint8_t maximum, Print* mirror, SessionStats* stats) {
   uint8_t processed = 0;
   while (count_ && processed < maximum) {
     FixedLine line;
     printEvent(line, queue_[head_]);
     if (!line.overflow) {
       output.write(line.bytes, line.length);
-      if (mirror && mirror->write(line.bytes, line.length) != line.length) {
-        ++mirrorErrors_;
+      bool saved = false;
+      if (mirror) {
+        saved = mirror->write(line.bytes, line.length) == line.length;
+        if (!saved) ++mirrorErrors_;
       }
+      if (stats) stats->onEvent(queue_[head_], saved);
     } else {
       ++mirrorErrors_;
+      if (stats) stats->onEvent(queue_[head_], false);
       output.println(F("PIPE event serialization overflow"));
     }
     head_ = static_cast<uint8_t>((head_ + 1) % kCapacity);

@@ -1,6 +1,7 @@
 #pragma once
 #include <Arduino.h>
 #include "Observation.h"
+#include "SessionStats.h"
 
 namespace callingcard {
 // One producer context at a time in current firmware; callbacks during BLE scan
@@ -9,7 +10,7 @@ class EventPipeline {
  public:
   static constexpr uint8_t kCapacity = 32;
   bool enqueue(const Observation& observation);
-  void drainTo(Print& output, uint8_t maximum = 8, Print* mirror = nullptr);
+  void drainTo(Print& output, uint8_t maximum = 8, Print* mirror = nullptr, SessionStats* stats = nullptr);
   uint32_t mirrorErrors() const { return mirrorErrors_; }
   uint32_t dropped() const { return dropped_; }
   uint32_t emitted() const { return emitted_; }
