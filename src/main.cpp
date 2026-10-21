@@ -13,6 +13,7 @@
 #include "SessionStats.h"
 #include "SessionHistory.h"
 #include "HistoryDetails.h"
+#include "RfActivity.h"
 
 namespace {
 constexpr uint32_t kPauseMs = 2500;
@@ -32,6 +33,8 @@ uint32_t lastScanEndMs = 0;
 uint32_t nextCapLogMs = 0;
 callingcard::CapSensors cap;
 callingcard::EventPipeline pipeline;
+callingcard::RfActivity activity;
+bool activityVisible = false;
 callingcard::SessionStats sessionStats;
 callingcard::SessionHistory history;
 callingcard::HistoryDetails details;
@@ -173,7 +176,7 @@ void serviceStorage() {
 void handleSessionKeys() {
   // Isolated key-down edges; scanning keeps running through every state.
   static bool priorR = false, priorP = false, priorS = false;
-  static bool priorH = false, priorJ = false, priorK = false, priorD = false;
+  static bool priorH = false, priorJ = false, priorK = false, priorD = false, priorA = false;
   const bool r = M5Cardputer.Keyboard.isKeyPressed('r');
   const bool p = M5Cardputer.Keyboard.isKeyPressed('p');
   const bool s = M5Cardputer.Keyboard.isKeyPressed('s');
@@ -181,7 +184,17 @@ void handleSessionKeys() {
   const bool j = M5Cardputer.Keyboard.isKeyPressed('j');
   const bool k = M5Cardputer.Keyboard.isKeyPressed('k');
   const bool d = M5Cardputer.Keyboard.isKeyPressed('d');
+  const bool a = M5Cardputer.Keyboard.isKeyPressed('a');
+  if (a && !priorA) {
+    activityVisible = !activityVisible;
+    if (activityVisible) {
+      details.close(); detailVisible = false; historyVisible = false;
+    }
+    nextDisplayMs = 0;
+  }
+  priorA = a;
   if (h && !priorH) {
+    activityVisible = false;
     if (detailVisible) { details.close(); detailVisible = false; }
     else {
       historyVisible = !historyVisible && sdMounted;
@@ -318,6 +331,32 @@ void drawStatus(const char* mode) {
   file = file ? file + 1 : (sessionPath[0] ? sessionPath : "-");
 
   d.fillScreen(TFT_BLACK);
+  if (activityVisible) {
+    d.setTextFont(1);
+    d.setTextSize(1);
+    d.setTextColor(TFT_GREEN, TFT_BLACK);
+    d.setCursor(4, 3);
+    d.print("RF ACTIVITY / LAST 2 MIN");
+    const uint16_t colors[3] = {TFT_GREEN, TFT_CYAN, TFT_YELLOW};
+    const char* names[3] = {"WIFI", "BLE", "LORA"};
+    for (uint8_t radio=0; radio<3; ++radio) {
+      const int top = 20 + radio*30;
+      d.setTextColor(colors[radio], TFT_BLACK);
+      d.setCursor(4, top);
+      d.printf("%s %lu", names[radio], (unsigned long)activity.sum(radio));
+      const uint32_t peak = activity.peak(radio);
+      for (uint8_t bin=0; bin<callingcard::RfActivity::kBins; ++bin) {
+        const uint32_t count = activity.sample(radio, bin);
+        const uint8_t height = peak ? (uint8_t)((uint64_t)count*17/peak) : 0;
+        if (height) d.fillRect(76+bin*6, top+19-height, 4, height, colors[radio]);
+      }
+    }
+    d.setTextColor(TFT_WHITE, TFT_BLACK);
+    d.drawFastHLine(4, 112, 232, TFT_DARKGREY);
+    d.setCursor(4, 117);
+    d.print("A dashboard  H history");
+    return;
+  }
   if (historyVisible && detailVisible) {
     d.setTextFont(1);
     d.setTextSize(1);
@@ -428,7 +467,7 @@ void drawStatus(const char* mode) {
            cap.radioReady() ? "RX" : "ERR", (unsigned long)ESP.getFreeHeap());
   d.drawFastHLine(4, 112, 232, TFT_DARKGREY);
   d.setCursor(4, 117);
-  d.print("P pause S stop R start H history");
+  d.print("P pause S stop R start H hist A RF");
 }
 
 void beginSurvey() {
@@ -539,6 +578,7 @@ void setup() {
   bleScanner->setInterval(160);     // 100 ms units of 0.625 ms
   bleScanner->setWindow(80);        // 50 ms receive window
   cap.begin();
+  pipeline.setActivity(&activity);
   beginStorage();
   Serial.println("Callingcard PR5 event pipeline boot");
   drawStatus("READY");
@@ -549,6 +589,7 @@ void loop() {
   M5Cardputer.update();
   handleSessionKeys();
   cap.poll(pipeline);
+  activity.advance(millis());
   refreshGnssAnchor();
   drainBleSamples();
   bleLossForSummary = blePrequeueDropped;

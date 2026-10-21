@@ -2,6 +2,7 @@
 #include <Arduino.h>
 #include "Observation.h"
 #include "SessionStats.h"
+#include "RfActivity.h"
 
 namespace callingcard {
 // One producer context at a time in current firmware; callbacks during BLE scan
@@ -10,6 +11,7 @@ class EventPipeline {
  public:
   static constexpr uint8_t kCapacity = 32;
   bool enqueue(const Observation& observation);
+  void setActivity(RfActivity* activity) { activity_ = activity; }
   void drainTo(Print& output, uint8_t maximum = 8, Print* mirror = nullptr, SessionStats* stats = nullptr);
   uint32_t mirrorErrors() const { return mirrorErrors_; }
   uint32_t dropped() const { return dropped_; }
@@ -25,6 +27,7 @@ class EventPipeline {
   uint32_t emitted_ = 0;
   uint32_t sequence_ = 0;
   uint32_t mirrorErrors_ = 0;
+  RfActivity* activity_ = nullptr;
   static void printEscaped(Print& out, const char* data);
   void printEvent(Print& out, const Observation& observation);
 };

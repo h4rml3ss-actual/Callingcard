@@ -9,6 +9,7 @@ bool EventPipeline::enqueue(const Observation& observation) {
   queue_[tail_] = observation;
   tail_ = static_cast<uint8_t>((tail_ + 1) % kCapacity);
   ++count_;
+  if (activity_) activity_->add(observation);
   return true;
 }
 
