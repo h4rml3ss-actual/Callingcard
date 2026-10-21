@@ -7,12 +7,13 @@
 #include "utility/PI4IOE5V6408_Class.hpp"
 
 namespace callingcard {
+class EventPipeline;
 // Driver for the M5Stack Cap LoRa-1262 only. Receive-only by design.
 // No GPS location is emitted without a current valid fix.
 class CapSensors {
  public:
   void begin();
-  void poll();
+  void poll(EventPipeline& events);
   void logStatus();
   bool gnssFix() const;
   bool radioReady() const { return radioState_ == RADIOLIB_ERR_NONE; }
