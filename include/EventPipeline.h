@@ -9,7 +9,8 @@ class EventPipeline {
  public:
   static constexpr uint8_t kCapacity = 32;
   bool enqueue(const Observation& observation);
-  void drainTo(Print& output, uint8_t maximum = 8);
+  void drainTo(Print& output, uint8_t maximum = 8, Print* mirror = nullptr);
+  uint32_t mirrorErrors() const { return mirrorErrors_; }
   uint32_t dropped() const { return dropped_; }
   uint32_t emitted() const { return emitted_; }
   uint8_t queued() const { return count_; }
@@ -22,6 +23,7 @@ class EventPipeline {
   uint32_t dropped_ = 0;
   uint32_t emitted_ = 0;
   uint32_t sequence_ = 0;
+  uint32_t mirrorErrors_ = 0;
   static void printEscaped(Print& out, const char* data);
   void printEvent(Print& out, const Observation& observation);
 };

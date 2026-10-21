@@ -53,10 +53,41 @@ void EventPipeline::printEvent(Print& out, const Observation& o) {
   out.println(F("\",\"utc\":null,\"position\":null}"));
 }
 
-void EventPipeline::drainTo(Print& output, uint8_t maximum) {
+// Write each event once into bounded RAM before fanning out to serial and SD.
+// If an unusually long event exceeds the buffer, preserve serial visibility
+// and signal the mirror failure instead of writing a truncated JSONL record.
+namespace {
+class FixedLine : public Print {
+ public:
+  size_t write(uint8_t b) override {
+    if (length >= sizeof(bytes)) { overflow = true; return 0; }
+    bytes[length++] = b;
+    return 1;
+  }
+  size_t write(const uint8_t* data, size_t size) override {
+    size_t n = 0;
+    for (; n < size; ++n) if (write(data[n]) != 1) break;
+    return n;
+  }
+  uint8_t bytes[512]{};
+  size_t length = 0;
+  bool overflow = false;
+};
+}
+void EventPipeline::drainTo(Print& output, uint8_t maximum, Print* mirror) {
   uint8_t processed = 0;
   while (count_ && processed < maximum) {
-    printEvent(output, queue_[head_]);
+    FixedLine line;
+    printEvent(line, queue_[head_]);
+    if (!line.overflow) {
+      output.write(line.bytes, line.length);
+      if (mirror && mirror->write(line.bytes, line.length) != line.length) {
+        ++mirrorErrors_;
+      }
+    } else {
+      ++mirrorErrors_;
+      output.println(F("PIPE event serialization overflow"));
+    }
     head_ = static_cast<uint8_t>((head_ + 1) % kCapacity);
     --count_;
     ++processed;
