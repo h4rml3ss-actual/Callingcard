@@ -5,6 +5,8 @@
 #include <WiFi.h>
 #include <BLEDevice.h>
 #include <BLEScan.h>
+#include <SPI.h>
+#include <SD.h>
 #include "Observation.h"
 #include "CapSensors.h"
 #include "EventPipeline.h"
@@ -26,6 +28,74 @@ uint32_t nextCapLogMs = 0;
 callingcard::CapSensors cap;
 callingcard::EventPipeline pipeline;
 uint32_t nextPipelineLogMs = 0;
+// Cardputer ADV and Cap LoRa-1262 share SPI CLK=40, MISO=39,
+// MOSI=14; microSD CS=12 and SX1262 CS=5. All SPI users run on main
+// loop; no SD operations occur in LoRa ISR or BLE callback.
+constexpr uint8_t kSdCs = 12;
+constexpr uint8_t kLoRaCs = 5;
+constexpr uint32_t kFlushEveryMs = 5000;
+constexpr uint32_t kMaxSessionBytes = 4UL * 1024 * 1024;
+File sessionFile;
+bool sdActive = false;
+uint32_t sdRecords = 0;
+uint32_t sdErrors = 0;
+uint32_t nextFlushMs = 0;
+uint32_t nextSdLogMs = 0;
+uint32_t priorMirrorErrors = 0;
+char sessionPath[32] = {};
+void disableStorage(const char* reason) {
+  ++sdErrors;
+  Serial.printf("SD ERROR reason=%s\n", reason);
+  if (sessionFile) sessionFile.close();
+  sdActive = false; // Continue scanning and serial JSONL without SD.
+}
+void beginStorage() {
+  pinMode(kSdCs, OUTPUT);
+  digitalWrite(kSdCs, HIGH);
+  pinMode(kLoRaCs, OUTPUT);
+  digitalWrite(kLoRaCs, HIGH);
+  // SPI already initialized by CapSensors using the ADV shared pin map.
+  if (!SD.begin(kSdCs, SPI, 4000000)) {
+    Serial.println("SD status=NO_CARD_OR_MOUNT_FAILED serial_only=1");
+    return;
+  }
+  if (!SD.exists("/CALLINGCARD")) SD.mkdir("/CALLINGCARD");
+  // Numeric per-boot session filename prevents append across reboot and
+  // avoids relying on GNSS time before a valid fix is available.
+  bool found = false;
+  for (unsigned i = 0; i < 1000; ++i) {
+    snprintf(sessionPath, sizeof(sessionPath), "/CALLINGCARD/S%03u.JSONL", i);
+    if (!SD.exists(sessionPath)) { found = true; break; }
+  }
+  if (!found) { disableStorage("SESSION_DIRECTORY_FULL"); return; }
+  sessionFile = SD.open(sessionPath, FILE_WRITE);
+  if (!sessionFile) { disableStorage("OPEN_FAILED"); return; }
+  sdActive = true;
+  nextFlushMs = millis() + kFlushEveryMs;
+  Serial.printf("SD status=RECORDING path=%s flush_ms=%lu limit_bytes=%lu\n",
+                sessionPath, (unsigned long)kFlushEveryMs,
+                (unsigned long)kMaxSessionBytes);
+}
+void serviceStorage() {
+  if (!sdActive) return;
+  if (pipeline.mirrorErrors() != priorMirrorErrors) {
+    priorMirrorErrors = pipeline.mirrorErrors();
+    disableStorage("WRITE_FAILED");
+    return;
+  }
+  if (sessionFile.size() >= kMaxSessionBytes) {
+    sessionFile.flush();
+    Serial.printf("SD status=SESSION_LIMIT path=%s bytes=%lu\n",
+                  sessionPath, (unsigned long)sessionFile.size());
+    sessionFile.close();
+    sdActive = false;
+    return;
+  }
+  if ((int32_t)(millis() - nextFlushMs) >= 0) {
+    sessionFile.flush();
+    nextFlushMs = millis() + kFlushEveryMs;
+  }
+}
 bool scanWifiNext = true;
 BLEScan* bleScanner = nullptr;
 callingcard::Observation latest[kMaxLines]{};
@@ -145,6 +215,7 @@ void setup() {
   bleScanner->setInterval(160);     // 100 ms units of 0.625 ms
   bleScanner->setWindow(80);        // 50 ms receive window
   cap.begin();
+  beginStorage();
   Serial.println("Callingcard PR5 event pipeline boot");
   drawStatus("READY");
 }
@@ -152,7 +223,16 @@ void setup() {
 void loop() {
   M5Cardputer.update();
   cap.poll(pipeline);
-  pipeline.drainTo(Serial, 8);
+  pipeline.drainTo(Serial, 8, sdActive ? static_cast<Print*>(&sessionFile) : nullptr);
+  serviceStorage();
+  if ((int32_t)(millis() - nextSdLogMs) >= 0) {
+    Serial.printf("SD status=%s path=%s bytes=%lu errors=%lu\n",
+                  sdActive ? "RECORDING" : "SERIAL_ONLY",
+                  sessionPath[0] ? sessionPath : "none",
+                  sdActive ? (unsigned long)sessionFile.size() : 0UL,
+                  (unsigned long)sdErrors);
+    nextSdLogMs = millis() + 10000;
+  }
   if (static_cast<int32_t>(millis() - nextPipelineLogMs) >= 0) {
     Serial.printf("PIPE queue=%u emitted=%lu dropped=%lu heap=%u\n",
                   pipeline.queued(), static_cast<unsigned long>(pipeline.emitted()),
