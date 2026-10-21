@@ -12,6 +12,7 @@
 #include "EventPipeline.h"
 #include "SessionStats.h"
 #include "SessionHistory.h"
+#include "HistoryDetails.h"
 
 namespace {
 constexpr uint32_t kPauseMs = 2500;
@@ -33,6 +34,8 @@ callingcard::CapSensors cap;
 callingcard::EventPipeline pipeline;
 callingcard::SessionStats sessionStats;
 callingcard::SessionHistory history;
+callingcard::HistoryDetails details;
+bool detailVisible = false;
 bool historyVisible = false;
 uint32_t bleLossForSummary = 0;
 uint32_t nextPipelineLogMs = 0;
@@ -170,23 +173,35 @@ void serviceStorage() {
 void handleSessionKeys() {
   // Isolated key-down edges; scanning keeps running through every state.
   static bool priorR = false, priorP = false, priorS = false;
-  static bool priorH = false, priorJ = false, priorK = false;
+  static bool priorH = false, priorJ = false, priorK = false, priorD = false;
   const bool r = M5Cardputer.Keyboard.isKeyPressed('r');
   const bool p = M5Cardputer.Keyboard.isKeyPressed('p');
   const bool s = M5Cardputer.Keyboard.isKeyPressed('s');
   const bool h = M5Cardputer.Keyboard.isKeyPressed('h');
   const bool j = M5Cardputer.Keyboard.isKeyPressed('j');
   const bool k = M5Cardputer.Keyboard.isKeyPressed('k');
+  const bool d = M5Cardputer.Keyboard.isKeyPressed('d');
   if (h && !priorH) {
-    historyVisible = !historyVisible && sdMounted;
-    if (historyVisible) history.begin();
+    if (detailVisible) { details.close(); detailVisible = false; }
+    else {
+      historyVisible = !historyVisible && sdMounted;
+      if (historyVisible) history.begin();
+    }
     nextDisplayMs = 0;
   }
-  if (historyVisible) {
+  if (historyVisible && !detailVisible) {
     if (j && !priorJ) history.move(-1);
     if (k && !priorK) history.move(1);
+    if (d && !priorD && !history.scanning()) {
+      const auto* selected = history.selected();
+      if (selected) {
+        detailVisible = true;
+        details.open(selected->number);
+        nextDisplayMs = 0;
+      }
+    }
   }
-  priorH = h; priorJ = j; priorK = k;
+  priorH = h; priorJ = j; priorK = k; priorD = d;
   if (r && !priorR) {
     if (sessionState == SessionState::Paused) resumeSession();
     else if (sessionState == SessionState::Stopped || sessionState == SessionState::Limit)
@@ -303,6 +318,37 @@ void drawStatus(const char* mode) {
   file = file ? file + 1 : (sessionPath[0] ? sessionPath : "-");
 
   d.fillScreen(TFT_BLACK);
+  if (historyVisible && detailVisible) {
+    d.setTextFont(1);
+    d.setTextSize(1);
+    d.setTextColor(TFT_GREEN, TFT_BLACK);
+    d.setCursor(4, 3);
+    d.printf("SESSION S%03u / DETAILS", details.number());
+    d.setTextColor(TFT_WHITE, TFT_BLACK);
+    d.setCursor(4, 20);
+    const auto state = details.state();
+    if (state == callingcard::HistoryDetails::State::Failed) d.print("READ FAILED");
+    else if (state == callingcard::HistoryDetails::State::Done) d.print("COMPLETE");
+    else d.printf("READ %lu / %lu", (unsigned long)details.readBytes(),
+                  (unsigned long)details.bytes());
+    d.setCursor(4, 37);
+    d.printf("WIFI %lu BLE %lu LORA %lu",
+      (unsigned long)details.observations(0),
+      (unsigned long)details.observations(1),
+      (unsigned long)details.observations(2));
+    d.setCursor(4, 54);
+    d.printf("UTC %lu  GPS %lu",
+      (unsigned long)details.utcTagged(), (unsigned long)details.positioned());
+    d.setCursor(4, 71);
+    d.printf("BAD/TRUNC %lu", (unsigned long)details.invalid());
+    d.setCursor(4, 88);
+    if (details.hasRssi(0)) d.printf("W RSSI %d / %d", details.strongest(0), details.weakest(0));
+    else if (details.hasRssi(1)) d.printf("B RSSI %d / %d", details.strongest(1), details.weakest(1));
+    d.drawFastHLine(4, 112, 232, TFT_DARKGREY);
+    d.setCursor(4, 117);
+    d.print("H back");
+    return;
+  }
   if (historyVisible) {
     d.setTextFont(1);
     d.setTextSize(1);
@@ -326,7 +372,7 @@ void drawStatus(const char* mode) {
     d.printf("Read errors: %lu", (unsigned long)history.errors());
     d.drawFastHLine(4, 112, 232, TFT_DARKGREY);
     d.setCursor(4, 117);
-    d.print("J prev K next H back");
+    d.print("J prev K next D details H exit");
     return;
   }
   d.setTextFont(1);
@@ -509,7 +555,8 @@ void loop() {
   pipeline.drainTo(Serial, 8, sessionState == SessionState::Recording ? static_cast<Print*>(&sessionFile) : nullptr,
                    sessionStats.hasSession() && (sessionState == SessionState::Recording || sessionState == SessionState::Paused) ? &sessionStats : nullptr);
   serviceStorage();
-  if (historyVisible && sdMounted) history.tick(sessionFile ? sessionPath : nullptr);
+  if (historyVisible && sdMounted && !detailVisible) history.tick(sessionFile ? sessionPath : nullptr);
+  if (detailVisible) details.tick();
   if ((int32_t)(millis() - nextDisplayMs) >= 0) {
     drawStatus("STATUS");
     nextDisplayMs = millis() + kDisplayRefreshMs;
