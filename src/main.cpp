@@ -35,66 +35,138 @@ constexpr uint8_t kSdCs = 12;
 constexpr uint8_t kLoRaCs = 5;
 constexpr uint32_t kFlushEveryMs = 5000;
 constexpr uint32_t kMaxSessionBytes = 4UL * 1024 * 1024;
+enum class SessionState { NoCard, Recording, Paused, Stopped, Limit, Error };
+SessionState sessionState = SessionState::NoCard;
+const char* stateName() {
+  switch (sessionState) {
+    case SessionState::NoCard: return "NO_CARD";
+    case SessionState::Recording: return "RECORDING";
+    case SessionState::Paused: return "PAUSED";
+    case SessionState::Stopped: return "STOPPED";
+    case SessionState::Limit: return "LIMIT";
+    case SessionState::Error: return "ERROR";
+  }
+  return "UNKNOWN";
+}
 File sessionFile;
-bool sdActive = false;
-uint32_t sdRecords = 0;
+bool sdMounted = false;
 uint32_t sdErrors = 0;
+uint32_t lastSessionBytes = 0;
 uint32_t nextFlushMs = 0;
 uint32_t nextSdLogMs = 0;
 uint32_t priorMirrorErrors = 0;
 char sessionPath[32] = {};
-void disableStorage(const char* reason) {
+void closeSession() {
+  if (sessionFile) {
+    sessionFile.flush();
+    lastSessionBytes = sessionFile.size();
+    sessionFile.close();
+  }
+}
+void storageError(const char* reason) {
   ++sdErrors;
-  Serial.printf("SD ERROR reason=%s\n", reason);
-  if (sessionFile) sessionFile.close();
-  sdActive = false; // Continue scanning and serial JSONL without SD.
+  Serial.printf("SD ERROR reason=%s\\n", reason);
+  closeSession();
+  sessionState = SessionState::Error;
+}
+bool createSession() {
+  if (!sdMounted) {
+    sessionState = SessionState::NoCard;
+    return false;
+  }
+  if (!SD.exists("/CALLINGCARD") && !SD.mkdir("/CALLINGCARD")) {
+    storageError("MKDIR_FAILED");
+    return false;
+  }
+  char candidate[sizeof(sessionPath)] = {};
+  bool found = false;
+  for (unsigned i = 0; i < 1000; ++i) {
+    snprintf(candidate, sizeof(candidate), "/CALLINGCARD/S%03u.JSONL", i);
+    if (!SD.exists(candidate)) { found = true; break; }
+  }
+  if (!found) { storageError("SESSION_DIRECTORY_FULL"); return false; }
+  File opened = SD.open(candidate, FILE_WRITE);
+  if (!opened) { storageError("OPEN_FAILED"); return false; }
+  sessionFile = opened;
+  snprintf(sessionPath, sizeof(sessionPath), "%s", candidate);
+  lastSessionBytes = 0;
+  priorMirrorErrors = pipeline.mirrorErrors();
+  nextFlushMs = millis() + kFlushEveryMs;
+  sessionState = SessionState::Recording;
+  Serial.printf("SD status=RECORDING path=%s\\n", sessionPath);
+  return true;
 }
 void beginStorage() {
   pinMode(kSdCs, OUTPUT);
   digitalWrite(kSdCs, HIGH);
   pinMode(kLoRaCs, OUTPUT);
   digitalWrite(kLoRaCs, HIGH);
-  // SPI already initialized by CapSensors using the ADV shared pin map.
   if (!SD.begin(kSdCs, SPI, 4000000)) {
-    Serial.println("SD status=NO_CARD_OR_MOUNT_FAILED serial_only=1");
+    sessionState = SessionState::NoCard;
+    Serial.println("SD status=NO_CARD mount_failed=1 serial_only=1");
     return;
   }
-  if (!SD.exists("/CALLINGCARD")) SD.mkdir("/CALLINGCARD");
-  // Numeric per-boot session filename prevents append across reboot and
-  // avoids relying on GNSS time before a valid fix is available.
-  bool found = false;
-  for (unsigned i = 0; i < 1000; ++i) {
-    snprintf(sessionPath, sizeof(sessionPath), "/CALLINGCARD/S%03u.JSONL", i);
-    if (!SD.exists(sessionPath)) { found = true; break; }
-  }
-  if (!found) { disableStorage("SESSION_DIRECTORY_FULL"); return; }
-  sessionFile = SD.open(sessionPath, FILE_WRITE);
-  if (!sessionFile) { disableStorage("OPEN_FAILED"); return; }
-  sdActive = true;
+  sdMounted = true;
+  createSession(); // Preserve PR13 auto-record behavior.
+}
+void pauseSession() {
+  if (sessionState != SessionState::Recording) return;
+  sessionFile.flush();
+  lastSessionBytes = sessionFile.size();
+  sessionState = SessionState::Paused;
+  Serial.printf("SD status=PAUSED path=%s bytes=%lu\\n",
+                sessionPath, (unsigned long)lastSessionBytes);
+}
+void resumeSession() {
+  if (sessionState != SessionState::Paused) return;
+  if (!sessionFile) { storageError("RESUME_FILE_CLOSED"); return; }
+  sessionState = SessionState::Recording;
   nextFlushMs = millis() + kFlushEveryMs;
-  Serial.printf("SD status=RECORDING path=%s flush_ms=%lu limit_bytes=%lu\n",
-                sessionPath, (unsigned long)kFlushEveryMs,
-                (unsigned long)kMaxSessionBytes);
+  Serial.printf("SD status=RECORDING path=%s resumed=1\\n", sessionPath);
+}
+void stopSession() {
+  if (sessionState != SessionState::Recording && sessionState != SessionState::Paused) return;
+  closeSession();
+  sessionState = SessionState::Stopped;
+  Serial.printf("SD status=STOPPED path=%s bytes=%lu\\n",
+                sessionPath, (unsigned long)lastSessionBytes);
 }
 void serviceStorage() {
-  if (!sdActive) return;
+  if (sessionState != SessionState::Recording) return;
   if (pipeline.mirrorErrors() != priorMirrorErrors) {
     priorMirrorErrors = pipeline.mirrorErrors();
-    disableStorage("WRITE_FAILED");
+    storageError("WRITE_FAILED");
     return;
   }
   if (sessionFile.size() >= kMaxSessionBytes) {
-    sessionFile.flush();
-    Serial.printf("SD status=SESSION_LIMIT path=%s bytes=%lu\n",
-                  sessionPath, (unsigned long)sessionFile.size());
-    sessionFile.close();
-    sdActive = false;
+    closeSession();
+    sessionState = SessionState::Limit;
+    Serial.printf("SD status=LIMIT path=%s bytes=%lu\\n",
+                  sessionPath, (unsigned long)lastSessionBytes);
     return;
   }
   if ((int32_t)(millis() - nextFlushMs) >= 0) {
     sessionFile.flush();
     nextFlushMs = millis() + kFlushEveryMs;
   }
+}
+void handleSessionKeys() {
+  // Isolated key-down edges; scanning keeps running through every state.
+  static bool priorR = false, priorP = false, priorS = false;
+  const bool r = M5Cardputer.Keyboard.isKeyPressed('r');
+  const bool p = M5Cardputer.Keyboard.isKeyPressed('p');
+  const bool s = M5Cardputer.Keyboard.isKeyPressed('s');
+  if (r && !priorR) {
+    if (sessionState == SessionState::Paused) resumeSession();
+    else if (sessionState == SessionState::Stopped || sessionState == SessionState::Limit)
+      createSession();
+  }
+  if (p && !priorP) {
+    if (sessionState == SessionState::Recording) pauseSession();
+    else if (sessionState == SessionState::Paused) resumeSession();
+  }
+  if (s && !priorS) stopSession();
+  priorR = r; priorP = p; priorS = s;
 }
 bool scanWifiNext = true;
 BLEScan* bleScanner = nullptr;
@@ -222,14 +294,15 @@ void setup() {
 
 void loop() {
   M5Cardputer.update();
+  handleSessionKeys();
   cap.poll(pipeline);
-  pipeline.drainTo(Serial, 8, sdActive ? static_cast<Print*>(&sessionFile) : nullptr);
+  pipeline.drainTo(Serial, 8, sessionState == SessionState::Recording ? static_cast<Print*>(&sessionFile) : nullptr);
   serviceStorage();
   if ((int32_t)(millis() - nextSdLogMs) >= 0) {
     Serial.printf("SD status=%s path=%s bytes=%lu errors=%lu\n",
-                  sdActive ? "RECORDING" : "SERIAL_ONLY",
+                  stateName(),
                   sessionPath[0] ? sessionPath : "none",
-                  sdActive ? (unsigned long)sessionFile.size() : 0UL,
+                  sessionFile ? (unsigned long)sessionFile.size() : (unsigned long)lastSessionBytes,
                   (unsigned long)sdErrors);
     nextSdLogMs = millis() + 10000;
   }
