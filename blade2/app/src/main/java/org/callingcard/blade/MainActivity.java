@@ -262,7 +262,7 @@ public class MainActivity extends Activity {
             try {
                 int channel=Integer.parseInt(v[2]),rssi=Integer.parseInt(v[3]);
                 if(channel<0 || channel>196 || rssi>20 || rssi< -127) return;
-                graphical.add(source,channel,rssi,v[4].replaceAll("[\\\\p{Cntrl}]",""));
+                graphical.add(source,channel,rssi,v[4].replace("\\n"," ").replace("\\r"," "));
             } catch(NumberFormatException ignored) {}
         });
     }
