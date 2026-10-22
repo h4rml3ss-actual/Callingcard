@@ -105,6 +105,12 @@ class BladeTelemetry {
     if (millis()-lastMs_ < 1000) return;
 #if CALLINGCARD_BLADE_SECURE
     const bool secureReady = securityCallbacks_.authenticated;
+    // Temporary development reminder: USB serial only, not GATT.
+    if (!secureReady && millis() - lastPinReminderMs_ >= 15000) {
+      lastPinReminderMs_ = millis();
+      Serial.printf("BLADE PAIRING CODE %06lu | waiting for Blade authentication\n",
+                    (unsigned long)pin_);
+    }
 #endif
     lastMs_ = millis();
     // Keep under 20 bytes (default ATT MTU payload).
@@ -191,6 +197,7 @@ class BladeTelemetry {
     }
   } securityCallbacks_;
   uint32_t pin_ = 0;
+  uint32_t lastPinReminderMs_ = 0;
 #endif
   BLEServer* server_ = nullptr;
   BLECharacteristic* status_ = nullptr;
