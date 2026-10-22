@@ -155,6 +155,8 @@ void CapSensors::poll(EventPipeline& events) {
     int rc = radio_.readData(payload);
     if (rc == RADIOLIB_ERR_NONE) {
       ++packets_;
+      lastPacketRssi_ = static_cast<int16_t>(radio_.getRSSI());
+      lastPacketSnrTenths_ = static_cast<int16_t>(radio_.getSNR() * 10.0f);
       // Queue metadata only; never place the received payload in telemetry.
       Observation observation{};
       observation.kind = Kind::LoRaPacket;
