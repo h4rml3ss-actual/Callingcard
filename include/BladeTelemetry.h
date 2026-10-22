@@ -17,6 +17,16 @@ class BladeTelemetry {
     // Coalesce repeated observations and rate-limit to one alert / 4 seconds.
     if (pendingSource_ == 0) pendingSource_ = source;
   }
+  static constexpr const char* detailUuid() { return "cabb1e00-ccad-4abc-a112-24fc00000004"; }
+#if CALLINGCARD_BLADE_DETAILS
+  // Details are opt-in: public unencrypted GATT. Truncated labels only; no MACs or coordinates.
+  void queueDetail(char kind, int channel, int rssi, const char* label) {
+    if (kind != 'W' && kind != 'B' && kind != 'L') return;
+    // Non-blocking single-slot coalescing. BLE callback never calls this method.
+    snprintf(detailPending_, sizeof(detailPending_), "D,%c,%d,%d,%.8s", kind,
+             channel, rssi, label ? label : "");
+  }
+#endif
   bool connected() const { return callbacks_.connected; }
   void begin() {
     Serial.printf("BLADE init service=%s\n", serviceUuid());
@@ -29,6 +39,12 @@ class BladeTelemetry {
     alert_ = service->createCharacteristic(alertUuid(), BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_NOTIFY);
     alert_->addDescriptor(new BLE2902());
     alert_->setValue("E,0,-");
+#if CALLINGCARD_BLADE_DETAILS
+    detail_ = service->createCharacteristic(detailUuid(),
+         BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_NOTIFY);
+    detail_->addDescriptor(new BLE2902());
+    detail_->setValue("D,-,0,0,-");
+#endif
     status_->setValue("v1,0,0,0,0,0");
     service->start();
     BLEAdvertising* advertising = BLEDevice::getAdvertising();
@@ -48,6 +64,14 @@ class BladeTelemetry {
              (unsigned long)(wifi%1000),(unsigned long)(ble%1000),
              (unsigned long)(lora%1000), gpsFix?1:0, recording?1:0);
     status_->setValue(value);
+#if CALLINGCARD_BLADE_DETAILS
+    if (callbacks_.connected && detailPending_[0] && millis() - lastDetailMs_ >= 1000) {
+      detail_->setValue(detailPending_);
+      detail_->notify();
+      detailPending_[0] = 0;
+      lastDetailMs_ = millis();
+    }
+#endif
     if (callbacks_.connected && pendingSource_ && millis() - lastAlertMs_ >= 4000) {
       char alertValue[18] = {};
       snprintf(alertValue, sizeof(alertValue), "E,%lu,%c",
@@ -85,6 +109,11 @@ class BladeTelemetry {
   BLEServer* server_ = nullptr;
   BLECharacteristic* status_ = nullptr;
   BLECharacteristic* alert_ = nullptr;
+#if CALLINGCARD_BLADE_DETAILS
+  BLECharacteristic* detail_ = nullptr;
+  char detailPending_[20] = {};
+  uint32_t lastDetailMs_ = 0;
+#endif
   char pendingSource_ = 0;
   uint32_t lastAlertMs_ = 0;
   uint32_t alertSequence_ = 0;
