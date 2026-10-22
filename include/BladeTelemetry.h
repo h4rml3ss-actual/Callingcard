@@ -24,7 +24,7 @@ class BladeTelemetry {
     if (kind != 'W' && kind != 'B' && kind != 'L') return;
     // Fixed-size bounded FIFO; preserve first 12 observations of each burst.
     if (detailCount_ >= 12) { ++detailDropped_; return; }
-    snprintf(detailQueue_[detailTail_], sizeof(detailQueue_[0]), "D,%c,%d,%d,%.8s",
+    snprintf(detailQueue_[detailTail_], sizeof(detailQueue_[0]), "D,%c,%d,%d,%.23s",
              kind, channel, rssi, label ? label : "");
     detailTail_ = (detailTail_ + 1) % 12;
     ++detailCount_;
@@ -33,6 +33,7 @@ class BladeTelemetry {
   bool connected() const { return callbacks_.connected; }
   void begin() {
     Serial.printf("BLADE init service=%s\n", serviceUuid());
+    BLEDevice::setMTU(100); // Supports more than 8 label bytes when client negotiates MTU.
     server_ = BLEDevice::createServer();
     server_->setCallbacks(&callbacks_);
     BLEService* service = server_->createService(serviceUuid());
@@ -115,7 +116,7 @@ class BladeTelemetry {
   BLECharacteristic* alert_ = nullptr;
 #if CALLINGCARD_BLADE_DETAILS
   BLECharacteristic* detail_ = nullptr;
-  char detailQueue_[12][20] = {};
+  char detailQueue_[12][48] = {};
   uint8_t detailHead_ = 0, detailTail_ = 0, detailCount_ = 0;
   uint32_t detailDropped_ = 0;
   uint32_t lastDetailMs_ = 0;
