@@ -14,11 +14,13 @@ import android.graphics.Color;
 import android.view.Gravity;
 import android.widget.TextView;
 import android.widget.LinearLayout;
+import android.util.Log;
 import java.util.Arrays;
 import java.util.UUID;
 import java.nio.charset.StandardCharsets;
 
 public class MainActivity extends Activity {
+    private static final String TAG = "CallingcardBlade";
     private static final UUID SERVICE = UUID.fromString("cabb1e00-ccad-4abc-a112-24fc00000001");
     private static final UUID STATUS = UUID.fromString("cabb1e00-ccad-4abc-a112-24fc00000002");
     private final Handler handler = new Handler(Looper.getMainLooper());
@@ -30,15 +32,23 @@ public class MainActivity extends Activity {
     private final ScanCallback discovery = new ScanCallback() {
         @Override public void onScanResult(int callbackType, ScanResult result) {
             BluetoothDevice device = result.getDevice();
+            ScanRecord scanRecord = result.getScanRecord();
+            String name = scanRecord == null ? null : scanRecord.getDeviceName();
+            boolean uuidMatch = scanRecord != null && scanRecord.getServiceUuids() != null &&
+                                scanRecord.getServiceUuids().contains(new android.os.ParcelUuid(SERVICE));
+            boolean nameMatch = "Callingcard".equals(name);
+            Log.i(TAG, "scan name=" + name + " uuidMatch=" + uuidMatch + " rssi=" + result.getRssi());
+            if (!uuidMatch && !nameMatch) return;
             stopScan();
             if (!active || !canConnect()) return;
             show("Blade 2 HUD\nConnecting...");
             gatt = device.connectGatt(MainActivity.this, false, callback, BluetoothDevice.TRANSPORT_LE);
         }
-        @Override public void onScanFailed(int errorCode) { show("BLE scan failed: " + errorCode); scanning = false; }
+        @Override public void onScanFailed(int errorCode) { Log.e(TAG, "scan failed " + errorCode); show("BLE scan failed: " + errorCode); scanning = false; }
     };
     private final BluetoothGattCallback callback = new BluetoothGattCallback() {
         @Override public void onConnectionStateChange(BluetoothGatt client, int status, int state) {
+            Log.i(TAG, "connection state=" + state + " status=" + status);
             if (state == BluetoothProfile.STATE_CONNECTED) {
                 show("Connected\nDiscovering telemetry...");
                 if (canConnect()) client.discoverServices();
@@ -50,6 +60,7 @@ public class MainActivity extends Activity {
             }
         }
         @Override public void onServicesDiscovered(BluetoothGatt client, int status) {
+            Log.i(TAG, "services discovered status=" + status);
             if (status != BluetoothGatt.GATT_SUCCESS || !canConnect()) return;
             BluetoothGattService service = client.getService(SERVICE);
             BluetoothGattCharacteristic ch = service == null ? null : service.getCharacteristic(STATUS);
@@ -89,7 +100,7 @@ public class MainActivity extends Activity {
     }
     @Override public void onRequestPermissionsResult(int code, String[] permissions, int[] result) {
         super.onRequestPermissionsResult(code, permissions, result);
-        if (code == 7 && Arrays.stream(result).allMatch(v -> v == PackageManager.PERMISSION_GRANTED)) startScan();
+        if (code == 7 && result.length > 0 && Arrays.stream(result).allMatch(v -> v == PackageManager.PERMISSION_GRANTED)) startScan();
         else show("Bluetooth permission required");
     }
     private boolean canConnect() {
@@ -107,7 +118,8 @@ public class MainActivity extends Activity {
         if (scanner == null) { show("BLE scanner unavailable"); return; }
         show("Searching for Callingcard...");
         scanning = true;
-        scanner.startScan(Arrays.asList(new ScanFilter.Builder().setServiceUuid(new android.os.ParcelUuid(SERVICE)).build()),
+        Log.i(TAG, "starting unfiltered diagnostic scan");
+        scanner.startScan(null,
                           new ScanSettings.Builder().setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY).build(), discovery);
         handler.postDelayed(() -> {
             if (scanning) { stopScan(); show("No Callingcard found\nRetrying..."); handler.postDelayed(this::startScan, 1500); }
