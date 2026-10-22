@@ -223,7 +223,7 @@ public class MainActivity extends Activity {
             "--------------------\n" + latestHud + "\n\n" +
             (age < 3000 ? "LINK ACTIVE" : "LAST UPDATE " + (age/1000) + "s AGO") +
             (lastAlertMs >= 0 && SystemClock.elapsedRealtime() - lastAlertMs < 8000
-                ? "\\nALERT: " + lastAlert : ""));
+                ? "\nALERT: " + lastAlert : ""));
         display.setTextColor(age < 3000 ? Color.rgb(114,240,186) :
                              age < 10000 ? Color.YELLOW : Color.RED);
     }
