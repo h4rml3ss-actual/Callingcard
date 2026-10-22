@@ -83,12 +83,18 @@ public final class ScannerHudView extends View {
             int maxLines=page==1?3:6, row=0;
             for(int i=recent.size()-1;i>=0 && row<maxLines;i--,row++) {
                 Item item=recent.get(i);
-                String name=item.name.length()>15?item.name.substring(0,15):item.name;
+                String name=item.name;
                 int y=page==1?398+row*23:186+row*37;
-                txt(c,name,27,y,page==1?18:22,white);
+                float nameSize=page==1?17:20;
+                p.setTypeface(android.graphics.Typeface.MONOSPACE);
+                p.setTextSize(nameSize);
+                int maxWidth=page==1?275:260;
+                while(name.length()>1 && p.measureText(name)>maxWidth) name=name.substring(0,name.length()-1);
+                if(!name.equals(item.name) && name.length()>1) name=name.substring(0,name.length()-1)+"…";
+                txt(c,name,27,y,nameSize,white);
                 String extra=page==1?"ch"+item.channel+" "+item.rssi+"dBm":
                     page==2?item.rssi+"dBm":"RX";
-                txt(c,extra,292,y,page==1?17:19,green);
+                txt(c,extra,320,y,page==1?15:18,green);
             }
         }
         if(!alert.isEmpty()) txt(c,alert.length()>30?alert.substring(0,30):alert,28,453,18,Color.YELLOW);

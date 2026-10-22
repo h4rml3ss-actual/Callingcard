@@ -71,13 +71,20 @@ public class MainActivity extends Activity {
             Log.i(TAG, "connection state=" + state + " status=" + status);
             if (state == BluetoothProfile.STATE_CONNECTED) {
                 show("Connected\nDiscovering telemetry...");
-                if (canConnect()) client.discoverServices();
+                if (canConnect()) {
+                    // Request a larger ATT MTU before service discovery so names fit.
+                    if (!client.requestMtu(100)) client.discoverServices();
+                }
             } else if (state == BluetoothProfile.STATE_DISCONNECTED) {
                 handler.post(() -> { lastTelemetryMs = -1; latestHud = ""; lastAlert = ""; lastAlertSequence = -1; show("CALLINGCARD\\nLINK DISCONNECTED"); });
                 client.close();
                 if (gatt == client) gatt = null;
                 handler.postDelayed(() -> { if (active) startScan(); }, 2000);
             }
+        }
+        @Override public void onMtuChanged(BluetoothGatt client, int mtu, int status) {
+            Log.i(TAG, "negotiated MTU=" + mtu + " status=" + status);
+            if (canConnect()) client.discoverServices();
         }
         @Override public void onServicesDiscovered(BluetoothGatt client, int status) {
             Log.i(TAG, "services discovered status=" + status);
