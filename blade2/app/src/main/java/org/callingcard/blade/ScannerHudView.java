@@ -50,6 +50,7 @@ public final class ScannerHudView extends View {
                !name.equals("<hidden>") && old.name.equals(name) &&
                (index==1 || old.channel==channel)) {prior=old.history;break;}
         }
+        if(index==2 && !q.isEmpty()) prior=q.peekLast().history;
         Item updated=new Item(name,channel,rssi,now,prior);
         if(index==0) {
             while(!wifiSamples.isEmpty() && now-wifiSamples.peekFirst().timestamp>120000)
