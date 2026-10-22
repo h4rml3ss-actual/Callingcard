@@ -10,6 +10,13 @@ class BladeTelemetry {
  public:
   static constexpr const char* serviceUuid() { return "cabb1e00-ccad-4abc-a112-24fc00000001"; }
   static constexpr const char* statusUuid() { return "cabb1e00-ccad-4abc-a112-24fc00000002"; }
+  static constexpr const char* alertUuid() { return "cabb1e00-ccad-4abc-a112-24fc00000003"; }
+  // Small aggregate alert: E,<sequence mod 1000>,<W|B|L>. No identifiers.
+  void queueAlert(char source) {
+    if (source != 'W' && source != 'B' && source != 'L') return;
+    // Coalesce repeated observations and rate-limit to one alert / 4 seconds.
+    if (pendingSource_ == 0) pendingSource_ = source;
+  }
   bool connected() const { return callbacks_.connected; }
   void begin() {
     Serial.printf("BLADE init service=%s\n", serviceUuid());
@@ -19,6 +26,9 @@ class BladeTelemetry {
     status_ = service->createCharacteristic(statusUuid(),
       BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_NOTIFY);
     status_->addDescriptor(new BLE2902());
+    alert_ = service->createCharacteristic(alertUuid(), BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_NOTIFY);
+    alert_->addDescriptor(new BLE2902());
+    alert_->setValue("E,0,-");
     status_->setValue("v1,0,0,0,0,0");
     service->start();
     BLEAdvertising* advertising = BLEDevice::getAdvertising();
@@ -38,6 +48,16 @@ class BladeTelemetry {
              (unsigned long)(wifi%1000),(unsigned long)(ble%1000),
              (unsigned long)(lora%1000), gpsFix?1:0, recording?1:0);
     status_->setValue(value);
+    if (callbacks_.connected && pendingSource_ && millis() - lastAlertMs_ >= 4000) {
+      char alertValue[18] = {};
+      snprintf(alertValue, sizeof(alertValue), "E,%lu,%c",
+               (unsigned long)(++alertSequence_ % 1000), pendingSource_);
+      pendingSource_ = 0;
+      lastAlertMs_ = millis();
+      alert_->setValue(alertValue);
+      alert_->notify();
+      Serial.printf("BLADE alert=%s\n", alertValue);
+    }
     if (callbacks_.connected) {
       ++notificationAttempts_;
       status_->notify();
@@ -64,6 +84,10 @@ class BladeTelemetry {
   } callbacks_;
   BLEServer* server_ = nullptr;
   BLECharacteristic* status_ = nullptr;
+  BLECharacteristic* alert_ = nullptr;
+  char pendingSource_ = 0;
+  uint32_t lastAlertMs_ = 0;
+  uint32_t alertSequence_ = 0;
   bool hadConnection_ = false;
   uint32_t lastMs_ = 0;
   uint32_t lastLogMs_ = 0;
