@@ -41,6 +41,7 @@ public class MainActivity extends Activity {
     private BluetoothLeScanner scanner;
     private BluetoothGatt gatt;
     private BluetoothDevice pendingBond;
+    private volatile boolean linkConnected = false;
     private boolean bonding = false;
     private boolean bondFailed = false; // No repeated PIN prompts after a failed enrollment.
     private boolean bondingRegistered = false;
@@ -54,7 +55,8 @@ public class MainActivity extends Activity {
             if(state==BluetoothDevice.BOND_BONDED) {
                 bonding=false;
                 bondFailed=false;
-                connectPaired(device);
+                if(linkConnected && gatt!=null) beginServiceDiscovery(gatt);
+                else if (gatt==null) connectPaired(device);
             } else if(state==BluetoothDevice.BOND_NONE) {
                 bonding=false;pendingBond=null;
                 bondFailed=true;
@@ -91,23 +93,16 @@ public class MainActivity extends Activity {
             // system PIN prompts and raced the separate bond receiver.
             if (bondFailed || bonding) return;
             pendingBond=device;
-            if (device.getBondState()==BluetoothDevice.BOND_BONDED) {
-                connectPaired(device);
-            } else {
-                bonding=true;
-                show("PAIR ONCE: enter Cardputer PIN");
-                if (!device.createBond()) {
-                    bonding=false;
-                    bondFailed=true;
-                    show("PAIRING COULD NOT START - restart app");
-                }
-            }
+            // Open the BLE physical link once, then initiate bonding from the
+            // connected state. On some Android BLE stacks createBond() before
+            // GATT connection never reaches a usable encrypted session.
+            connectPaired(device);
         }
         @Override public void onScanFailed(int errorCode) { Log.e(TAG, "scan failed " + errorCode); show("BLE scan failed: " + errorCode); scanning = false; }
     };
     private final BluetoothGattCallback callback = new BluetoothGattCallback() {
         @Override public void onConnectionStateChange(BluetoothGatt client, int status, int state) {
-            Log.i(TAG, "connection state=" + state + " status=" + status);
+            Log.i(TAG, "connection state=" + state + " status=" + status + " bond=" + client.getDevice().getBondState());
             if (state == BluetoothProfile.STATE_CONNECTED) {
                 show("Connected\nDiscovering telemetry...");
                 if (canConnect()) {
@@ -115,6 +110,7 @@ public class MainActivity extends Activity {
                     if (!client.requestMtu(100)) client.discoverServices();
                 }
             } else if (state == BluetoothProfile.STATE_DISCONNECTED) {
+                Log.w(TAG,"BLE disconnected, gattStatus="+status);
                 handler.post(() -> { lastTelemetryMs = -1; latestHud = ""; lastAlert = ""; lastAlertSequence = -1; show("CALLINGCARD\\nLINK DISCONNECTED"); });
                 client.close();
                 if (gatt == client) gatt = null;
@@ -215,10 +211,16 @@ public class MainActivity extends Activity {
             if (scanning) { stopScan(); show("No Callingcard found\nRetrying..."); handler.postDelayed(this::startScan, 1500); }
         }, 12000);
     }
+    private void beginServiceDiscovery(BluetoothGatt client) {
+        if (!active || !canConnect() || client==null || !linkConnected) return;
+        // ATT characteristic permissions remain MITM-protected on Cardputer.
+        if (!client.requestMtu(100)) client.discoverServices();
+    }
     private void connectPaired(BluetoothDevice device) {
         if(!active || !canConnect())return;
         if(gatt!=null) {gatt.close();gatt=null;}
-        show("TRUSTED DEVICE - Connecting...");
+        linkConnected=false;
+        show("CONNECTING BLE LINK...");
         pendingBond=device;
         gatt=device.connectGatt(this,false,callback,BluetoothDevice.TRANSPORT_LE);
     }
