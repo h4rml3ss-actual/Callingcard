@@ -22,6 +22,8 @@ class CapSensors {
   void annotate(Observation& observation);
   bool radioReady() const { return radioState_ == RADIOLIB_ERR_NONE; }
   uint32_t packetCount() const { return packets_; }
+  int16_t lastPacketRssi() const { return lastPacketRssi_; }
+  int16_t lastPacketSnrTenths() const { return lastPacketSnrTenths_; }
   const char* failureStage() const { return stage_; }
   int radioError() const { return radioState_; }
  private:
@@ -40,6 +42,8 @@ class CapSensors {
   int receiveCode_ = -999;
   const char* stage_ = "NOT_STARTED";
   uint32_t packets_ = 0;
+  int16_t lastPacketRssi_ = 0;
+  int16_t lastPacketSnrTenths_ = 0;
   bool gpsInitialized_ = false;
   uint32_t lastGpsSentenceMs_ = 0;
   static volatile bool rxFlag_;

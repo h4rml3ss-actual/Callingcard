@@ -668,7 +668,9 @@ void loop() {
     if (receivedLoRa > previousLoRaPackets) {
       blade.queueAlert('L');
 #if CALLINGCARD_BLADE_DETAILS
-      blade.queueDetail('L', 0, 0, "RX packet");
+      char snrLabel[24];
+      snprintf(snrLabel, sizeof(snrLabel), "SNR:%d", (int)cap.lastPacketSnrTenths());
+      blade.queueDetail('L', 0, cap.lastPacketRssi(), snrLabel);
 #endif
     }
     previousLoRaPackets = receivedLoRa;
