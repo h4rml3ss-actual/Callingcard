@@ -9,6 +9,9 @@ import android.os.Looper;
 import android.bluetooth.*;
 import android.bluetooth.le.*;
 import android.content.Context;
+import android.content.BroadcastReceiver;
+import android.content.Intent;
+import android.content.IntentFilter;
 import android.content.pm.PackageManager;
 import android.graphics.Color;
 import android.view.Gravity;
@@ -37,6 +40,25 @@ public class MainActivity extends Activity {
     private ScannerHudView graphical;
     private BluetoothLeScanner scanner;
     private BluetoothGatt gatt;
+    private BluetoothDevice pendingBond;
+    private boolean bonding = false;
+    private final BroadcastReceiver bondReceiver = new BroadcastReceiver() {
+        @Override public void onReceive(Context context, Intent intent) {
+            if (!BluetoothDevice.ACTION_BOND_STATE_CHANGED.equals(intent.getAction())) return;
+            BluetoothDevice device=intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE);
+            if(device==null || pendingBond==null || !device.getAddress().equals(pendingBond.getAddress())) return;
+            int state=intent.getIntExtra(BluetoothDevice.EXTRA_BOND_STATE,BluetoothDevice.BOND_NONE);
+            Log.i(TAG,"bond state="+state);
+            if(state==BluetoothDevice.BOND_BONDED) {
+                bonding=false;
+                connectPaired(device);
+            } else if(state==BluetoothDevice.BOND_NONE) {
+                bonding=false;pendingBond=null;
+                show("PAIRING FAILED: verify PIN and retry");
+                handler.postDelayed(() -> {if(active)startScan();},5000);
+            }
+        }
+    };
     private boolean scanning = false;
     private boolean active = false;
     private long lastTelemetryMs = -1;
@@ -138,6 +160,7 @@ public class MainActivity extends Activity {
         graphical = new ScannerHudView(this);
         setContentView(graphical);
         active = true;
+        registerReceiver(bondReceiver,new IntentFilter(BluetoothDevice.ACTION_BOND_STATE_CHANGED));
         handler.post(freshnessTicker);
         if (Build.VERSION.SDK_INT >= 31 &&
              (checkSelfPermission(Manifest.permission.BLUETOOTH_SCAN) != PackageManager.PERMISSION_GRANTED ||
@@ -173,6 +196,13 @@ public class MainActivity extends Activity {
         handler.postDelayed(() -> {
             if (scanning) { stopScan(); show("No Callingcard found\nRetrying..."); handler.postDelayed(this::startScan, 1500); }
         }, 12000);
+    }
+    private void connectPaired(BluetoothDevice device) {
+        if(!active || !canConnect())return;
+        if(gatt!=null) {gatt.close();gatt=null;}
+        show("TRUSTED DEVICE - Connecting...");
+        pendingBond=device;
+        gatt=device.connectGatt(this,false,callback,BluetoothDevice.TRANSPORT_LE);
     }
     private void stopScan() {
         if (scanning && scanner != null && canScan()) scanner.stopScan(discovery);
@@ -295,6 +325,7 @@ public class MainActivity extends Activity {
         active = false;
         stopScan();
         handler.removeCallbacksAndMessages(null);
+        unregisterReceiver(bondReceiver);
         if (gatt != null && canConnect()) { gatt.disconnect(); gatt.close(); gatt = null; }
         super.onDestroy();
     }
