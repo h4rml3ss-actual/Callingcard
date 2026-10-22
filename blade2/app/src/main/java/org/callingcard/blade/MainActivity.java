@@ -225,11 +225,6 @@ public class MainActivity extends Activity {
         }, 12000);
     }
     private void beginServiceDiscovery(BluetoothGatt client) {
-        if (!active || !canConnect() || client==null || !linkConnected) return;
-        // ATT characteristic permissions remain MITM-protected on Cardputer.
-        if (!client.requestMtu(100)) client.discoverServices();
-    }
-    private void beginServiceDiscovery(BluetoothGatt client) {
         if (!active || !canConnect() || client==null) return;
         Log.i(TAG, "SMP authenticated_bond=1; starting GATT discovery");
         if (!client.requestMtu(100)) client.discoverServices();
