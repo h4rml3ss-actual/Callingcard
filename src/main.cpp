@@ -14,6 +14,7 @@
 #include "SessionHistory.h"
 #include "HistoryDetails.h"
 #include "RfActivity.h"
+#include "BladeTelemetry.h"
 
 namespace {
 constexpr uint32_t kPauseMs = 2500;
@@ -33,6 +34,9 @@ uint32_t lastScanEndMs = 0;
 uint32_t nextCapLogMs = 0;
 callingcard::CapSensors cap;
 callingcard::EventPipeline pipeline;
+#if CALLINGCARD_BLADE_POC
+callingcard::BladeTelemetry blade;
+#endif
 callingcard::RfActivity activity;
 bool activityVisible = false;
 callingcard::SessionStats sessionStats;
@@ -572,6 +576,9 @@ void setup() {
   WiFi.mode(WIFI_STA);
   WiFi.disconnect();
   BLEDevice::init("Callingcard");
+#if CALLINGCARD_BLADE_POC
+  blade.begin();
+#endif
   bleScanner = BLEDevice::getScan();
   bleScanner->setAdvertisedDeviceCallbacks(&callback);
   bleScanner->setActiveScan(false); // passive advertisements only
@@ -596,6 +603,10 @@ void loop() {
   pipeline.drainTo(Serial, 8, sessionState == SessionState::Recording ? static_cast<Print*>(&sessionFile) : nullptr,
                    sessionStats.hasSession() && (sessionState == SessionState::Recording || sessionState == SessionState::Paused) ? &sessionStats : nullptr);
   serviceStorage();
+#if CALLINGCARD_BLADE_POC
+  blade.tick(wifiCount, bleCount, cap.packetCount(), cap.gnssFix(),
+             sessionState == SessionState::Recording);
+#endif
   if (historyVisible && sdMounted && !detailVisible) history.tick(sessionFile ? sessionPath : nullptr);
   if (detailVisible) details.tick();
   if ((int32_t)(millis() - nextDisplayMs) >= 0) {
