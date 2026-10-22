@@ -16,6 +16,7 @@ import android.widget.TextView;
 import android.widget.LinearLayout;
 import android.graphics.Typeface;
 import android.os.SystemClock;
+import android.view.KeyEvent;
 import android.util.Log;
 import java.util.Arrays;
 import java.util.UUID;
@@ -25,6 +26,7 @@ public class MainActivity extends Activity {
     private static final String TAG = "CallingcardBlade";
     private static final UUID SERVICE = UUID.fromString("cabb1e00-ccad-4abc-a112-24fc00000001");
     private static final UUID STATUS = UUID.fromString("cabb1e00-ccad-4abc-a112-24fc00000002");
+    private static final UUID DETAIL = UUID.fromString("cabb1e00-ccad-4abc-a112-24fc00000004");
     private static final UUID ALERT = UUID.fromString("cabb1e00-ccad-4abc-a112-24fc00000003");
     private static final UUID CCCD = UUID.fromString("00002902-0000-1000-8000-00805f9b34fb");
     private String lastAlert = "";
@@ -32,6 +34,7 @@ public class MainActivity extends Activity {
     private int lastAlertSequence = -1;
     private final Handler handler = new Handler(Looper.getMainLooper());
     private TextView display;
+    private ScannerHudView graphical;
     private BluetoothLeScanner scanner;
     private BluetoothGatt gatt;
     private boolean scanning = false;
@@ -95,13 +98,15 @@ public class MainActivity extends Activity {
             if (STATUS.equals(descriptor.getCharacteristic().getUuid()) && canConnect()) {
                 BluetoothGattService service = client.getService(SERVICE);
                 BluetoothGattCharacteristic alert = service == null ? null : service.getCharacteristic(ALERT);
-                if (alert == null) { Log.i(TAG, "legacy firmware: alert characteristic absent"); return; }
+                if (alert == null) { Log.i(TAG, "legacy firmware: alert characteristic absent"); subscribeDetails(client); return; }
                 client.setCharacteristicNotification(alert, true);
                 BluetoothGattDescriptor cccd = alert.getDescriptor(CCCD);
                 if (cccd != null) {
                     cccd.setValue(BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE);
                     client.writeDescriptor(cccd);
                 }
+            } else if (ALERT.equals(descriptor.getCharacteristic().getUuid())) {
+                subscribeDetails(client);
             }
         }
         @Override public void onCharacteristicRead(BluetoothGatt client, BluetoothGattCharacteristic ch, int status) {
@@ -110,6 +115,7 @@ public class MainActivity extends Activity {
         @Override public void onCharacteristicChanged(BluetoothGatt client, BluetoothGattCharacteristic ch) {
             if (STATUS.equals(ch.getUuid())) showPayload(ch.getValue());
             else if (ALERT.equals(ch.getUuid())) showAlert(ch.getValue());
+            else if (DETAIL.equals(ch.getUuid())) showDetail(ch.getValue());
         }
     };
     @Override public void onCreate(Bundle state) {
@@ -122,7 +128,8 @@ public class MainActivity extends Activity {
         display.setPadding(20, 18, 20, 18);
         display.setGravity(Gravity.CENTER);
         display.setText("CALLINGCARD\nBlade 2 BLE proof of concept");
-        setContentView(display);
+        graphical = new ScannerHudView(this);
+        setContentView(graphical);
         active = true;
         handler.post(freshnessTicker);
         if (Build.VERSION.SDK_INT >= 31 &&
@@ -179,6 +186,8 @@ public class MainActivity extends Activity {
                 String b = previousBle >= 0 && ble != previousBle ? "*" : " ";
                 String l = previousLora >= 0 && lora != previousLora ? "*" : " ";
                 previousWifi = wifi; previousBle = ble; previousLora = lora;
+                graphical.wifi=wifi; graphical.ble=ble; graphical.lora=lora;
+                graphical.gps=p[4].equals("1"); graphical.recording=p[5].equals("1");
                 latestHud = "Wi-Fi " + String.format(java.util.Locale.US, "%3d", wifi) + " " + w +
                     "\nBLE   " + String.format(java.util.Locale.US, "%3d", ble) + " " + b +
                     "\nLoRa  " + String.format(java.util.Locale.US, "%3d", lora) + " " + l +
@@ -209,6 +218,7 @@ public class MainActivity extends Activity {
                 }
                 lastAlertSequence = sequence;
                 lastAlert = source;
+                graphical.alert = source;
                 lastAlertMs = SystemClock.elapsedRealtime();
                 Log.i(TAG, "passive event alert: " + source);
                 renderHud();
@@ -219,6 +229,8 @@ public class MainActivity extends Activity {
         if (!active || lastTelemetryMs < 0) return;
         long age = SystemClock.elapsedRealtime() - lastTelemetryMs;
         String health = age < 3000 ? "LIVE" : age < 10000 ? "DELAYED" : "STALE";
+        graphical.health = health;
+        graphical.invalidate();
         display.setText("CALLINGCARD  " + health + "\n" +
             "--------------------\n" + latestHud + "\n\n" +
             (age < 3000 ? "LINK ACTIVE" : "LAST UPDATE " + (age/1000) + "s AGO") +
@@ -227,7 +239,41 @@ public class MainActivity extends Activity {
         display.setTextColor(age < 3000 ? Color.rgb(114,240,186) :
                              age < 10000 ? Color.YELLOW : Color.RED);
     }
-    private void show(String text) { runOnUiThread(() -> { if (active) display.setText(text); }); }
+    private void subscribeDetails(BluetoothGatt client) {
+        if (!canConnect()) return;
+        BluetoothGattService service=client.getService(SERVICE);
+        BluetoothGattCharacteristic ch=service==null?null:service.getCharacteristic(DETAIL);
+        if(ch==null) { Log.i(TAG,"legacy firmware: detail characteristic absent"); return; }
+        client.setCharacteristicNotification(ch,true);
+        BluetoothGattDescriptor descriptor=ch.getDescriptor(CCCD);
+        if(descriptor!=null) {
+            descriptor.setValue(BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE);
+            client.writeDescriptor(descriptor);
+        }
+    }
+    private void showDetail(byte[] raw) {
+        if(raw==null) return;
+        final String wire = new String(raw,StandardCharsets.UTF_8);
+        handler.post(() -> {
+            String[] v=wire.split(",",5);
+            if(v.length!=5 || !v[0].equals("D") || v[1].length()!=1) return;
+            char source=v[1].charAt(0);
+            if(source!='W' && source!='B' && source!='L') return;
+            try {
+                int channel=Integer.parseInt(v[2]),rssi=Integer.parseInt(v[3]);
+                if(channel<0 || channel>196 || rssi>20 || rssi< -127) return;
+                graphical.add(source,channel,rssi,v[4].replaceAll("[\\\\p{Cntrl}]",""));
+            } catch(NumberFormatException ignored) {}
+        });
+    }
+    @Override public boolean onKeyDown(int keyCode, KeyEvent event) {
+        if(keyCode==KeyEvent.KEYCODE_DPAD_RIGHT) { graphical.next(1); return true; }
+        if(keyCode==KeyEvent.KEYCODE_DPAD_LEFT) { graphical.next(-1); return true; }
+        return super.onKeyDown(keyCode,event);
+    }
+    private void show(String text) { runOnUiThread(() -> {
+        if (active) { display.setText(text); if(graphical!=null) { graphical.health=text; graphical.invalidate(); } }
+    }); }
     @Override protected void onDestroy() {
         active = false;
         stopScan();
