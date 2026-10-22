@@ -102,7 +102,7 @@ class BladeTelemetry {
   void tick(uint32_t wifi, uint32_t ble, uint32_t lora, bool gpsFix, bool recording) {
     if (millis()-lastMs_ < 1000) return;
 #if CALLINGCARD_BLADE_SECURE
-    if (!securityCallbacks_.authenticated) return; // Fail closed: no plaintext updates.
+    const bool secureReady = securityCallbacks_.authenticated;
 #endif
     lastMs_ = millis();
     // Keep under 20 bytes (default ATT MTU payload).
@@ -112,7 +112,11 @@ class BladeTelemetry {
              (unsigned long)(lora%1000), gpsFix?1:0, recording?1:0);
     status_->setValue(value);
 #if CALLINGCARD_BLADE_DETAILS
-    if (callbacks_.connected && detailCount_ && millis() - lastDetailMs_ >= 250) {
+    if (callbacks_.connected &&
+#if CALLINGCARD_BLADE_SECURE
+        secureReady &&
+#endif
+        detailCount_ && millis() - lastDetailMs_ >= 250) {
       detail_->setValue(detailQueue_[detailHead_]);
       detail_->notify();
       detailHead_ = (detailHead_ + 1) % 12;
@@ -120,7 +124,11 @@ class BladeTelemetry {
       lastDetailMs_ = millis();
     }
 #endif
-    if (callbacks_.connected && pendingSource_ && millis() - lastAlertMs_ >= 4000) {
+    if (callbacks_.connected &&
+#if CALLINGCARD_BLADE_SECURE
+        secureReady &&
+#endif
+        pendingSource_ && millis() - lastAlertMs_ >= 4000) {
       char alertValue[18] = {};
       snprintf(alertValue, sizeof(alertValue), "E,%lu,%c",
                (unsigned long)(++alertSequence_ % 1000), pendingSource_);
@@ -130,7 +138,11 @@ class BladeTelemetry {
       alert_->notify();
       Serial.printf("BLADE alert=%s\n", alertValue);
     }
-    if (callbacks_.connected) {
+    if (callbacks_.connected
+#if CALLINGCARD_BLADE_SECURE
+        && secureReady
+#endif
+    ) {
       ++notificationAttempts_;
       status_->notify();
       if (millis() - lastLogMs_ >= 10000) {
@@ -169,7 +181,7 @@ class BladeTelemetry {
     // Display-only pairing must never silently approve numeric comparison.
     bool onConfirmPIN(uint32_t) override { return false; }
     void onAuthenticationComplete(esp_ble_auth_cmpl_t result) override {
-      authenticated = result.success && result.auth_mode >= ESP_LE_AUTH_REQ_MITM;
+      authenticated = result.success && ((result.auth_mode & ESP_LE_AUTH_REQ_MITM) != 0);
       Serial.printf("BLADE secure_auth=%u mode=%u\n",
          authenticated?1:0, (unsigned)result.auth_mode);
     }
