@@ -22,7 +22,7 @@ PAGE = r"""<!doctype html>
 body{max-width:1100px;margin:20px auto;padding:0 18px}
 h1{font-size:1.5rem;color:#80edc7}.panel{background:#12262d;border:1px solid #2e5158;border-radius:10px;padding:15px;margin:12px 0}
 .controls{display:flex;flex-wrap:wrap;gap:14px;align-items:center}
-label{display:flex;gap:5px;align-items:center}select,input{background:#16333b;color:#fff;border:1px solid #56777b;border-radius:4px;padding:6px}
+label{display:flex;gap:5px;align-items:center}input[type=search]{min-width:160px}select,input{background:#16333b;color:#fff;border:1px solid #56777b;border-radius:4px;padding:6px}
 svg{width:100%;height:230px;background:#0b1b22;border-radius:8px}
 small{color:#aec2c4}.legend{display:flex;gap:20px;flex-wrap:wrap}
 .wifi{color:#7cecaa}.ble{color:#78cff9}.lora{color:#ffd27b}
@@ -33,13 +33,16 @@ small{color:#aec2c4}.legend{display:flex;gap:20px;flex-wrap:wrap}
 <label><input type="checkbox" class="radio" value="wifi" checked>Wi-Fi</label>
 <label><input type="checkbox" class="radio" value="ble" checked>BLE</label>
 <label><input type="checkbox" class="radio" value="lora" checked>LoRa</label>
+<label>Name contains <input id="search" type="search" placeholder="SSID or BLE name" autocomplete="off"></label>
+<label>Min RSSI (dBm) <input id="minRssi" type="number" min="-130" max="30" placeholder="All" style="width:75px"></label>
+<label><input id="onlyLocated" type="checkbox">GNSS fix only</label>
 <label>Timeline bin <select id="bins"><option value="5">5 sec</option><option value="15">15 sec</option><option value="60">60 sec</option></select></label></div>
 <div class="panel"><h2>Selected session</h2><div id="stats"></div></div>
 <div class="panel"><h2>Observation activity over uptime</h2><svg id="timeline" viewBox="0 0 900 230" role="img" aria-label="Per-radio observation count timeline"></svg><div class="tip" id="timelineTip"></div></div>
 <div class="panel"><h2>RSSI over uptime (dBm)</h2><svg id="rssi" viewBox="0 0 900 230" role="img" aria-label="RSSI scatterplot"></svg><div class="tip" id="rssiTip"></div></div>
 <div class="panel"><h2>Location-tagged observations — relative position plot</h2>
 <p><small>Local coordinates only; this is NOT a street map. Longitude increases rightward, latitude upward. Missing GNSS coordinates are not plotted.</small></p>
-<svg id="map" viewBox="0 0 900 300" role="img" aria-label="Latitude longitude observation scatterplot"></svg><div class="tip" id="mapTip"></div></div>
+<svg id="map" viewBox="0 0 900 300" role="img" aria-label="Latitude longitude observation scatterplot"></svg><div class="tip" id="mapTip"></div><div class="tip" id="bounds"></div></div>
 <p><small>No external scripts, tiles, network connections, or embedded third-party services. This file contains potentially sensitive wireless names and precise positions; store and share carefully.</small></p>
 <script id="data" type="application/json">__DATA__</script>
 <script>
@@ -49,15 +52,35 @@ const colors={wifi:'#7cecaa',ble:'#78cff9',lora:'#ffd27b'};
 const select=document.getElementById('session');
 const files=[...new Set(records.map(r=>r.file))];
 files.forEach(f=>{const o=document.createElement('option');o.value=f;o.textContent=f;select.appendChild(o)});
-function chosen(){let permitted=new Set([...document.querySelectorAll('.radio:checked')].map(e=>e.value));return records.filter(r=>(select.value===r.file)&&permitted.has(r.source))}
+function chosen(){
+const permitted=new Set([...document.querySelectorAll('.radio:checked')].map(e=>e.value));
+const name=document.getElementById('search').value.trim().toLowerCase();
+const minText=document.getElementById('minRssi').value.trim();
+const minRssi=minText===''?null:Number(minText);
+const located=document.getElementById('onlyLocated').checked;
+return records.filter(r=>r.file===select.value && permitted.has(r.source) &&
+ (!name||r.label.toLowerCase().includes(name)) &&
+ (minRssi===null||(Number.isFinite(r.rssi)&&r.rssi>=minRssi)) &&
+ (!located||r.lat!==null));
+}
 const svgNS='http://www.w3.org/2000/svg';
 function element(svg,tag,attrs){let e=document.createElementNS(svgNS,tag);Object.entries(attrs).forEach(([k,v])=>e.setAttribute(k,String(v)));svg.appendChild(e);return e}
 function clear(id, height){const svg=document.getElementById(id);svg.replaceChildren();element(svg,'line',{x1:45,y1:height-30,x2:880,y2:height-30,stroke:'#6a8993'});element(svg,'line',{x1:45,y1:20,x2:45,y2:height-30,stroke:'#6a8993'});return svg}
 function extent(vals){let a=Math.min(...vals),b=Math.max(...vals);if(!vals.length)return [0,1];if(a===b)return [a-1,b+1];return [a,b]}
 function plotXY(id,items,xFn,yFn,height,geo=false){
 const svg=clear(id,height), tip=document.getElementById(id+'Tip');tip.textContent='';
-if(!items.length){tip.textContent='No matching positioned/valid records.';return}
+if(!items.length){tip.textContent='No matching records.';if(geo)document.getElementById('bounds').textContent='No valid coordinates in current selection.';return}
 const xs=items.map(xFn),ys=items.map(yFn),[x0,x1]=extent(xs),[y0,y1]=extent(ys);
+if(geo){
+const fmt=x=>Number(x).toFixed(6);
+document.getElementById('bounds').textContent='Coordinate bounds: lat '+fmt(Math.min(...ys))+' to '+fmt(Math.max(...ys))+
+' | lon '+fmt(Math.min(...xs))+' to '+fmt(Math.max(...xs))+' (WGS84 degrees; no basemap)';
+for(let i=1;i<5;i++){
+const x=45+i*825/5,y=height-30-i*(height-50)/5;
+element(svg,'line',{x1:x,y1:20,x2:x,y2:height-30,stroke:'#28424b','stroke-dasharray':'3 4'});
+element(svg,'line',{x1:45,y1:y,x2:880,y2:y,stroke:'#28424b','stroke-dasharray':'3 4'});
+}
+}
 items.forEach(r=>{const x=45+(xFn(r)-x0)/(x1-x0)*825,y=height-30-(yFn(r)-y0)/(y1-y0)*(height-50);
 const circle=element(svg,'circle',{cx:x,cy:y,r:3,fill:colors[r.source],opacity:0.72});
 circle.addEventListener('mouseenter',()=>{tip.textContent=r.source+' / '+(r.utc||'UTC unavailable')+' / RSSI '+r.rssi+' dBm'+(geo?' / '+r.lat+', '+r.lon:'')+' / '+r.label});
@@ -84,7 +107,8 @@ plotXY('rssi',r.filter(v=>Number.isFinite(v.rssi)),v=>v.t,v=>v.rssi,230);
 plotXY('map',r.filter(v=>v.lat!==null),v=>v.lon,v=>v.lat,300,true);
 }
 select.addEventListener('change',render);
-document.querySelectorAll('.radio,#bins').forEach(x=>x.addEventListener('change',render));
+document.querySelectorAll('.radio,#bins,#onlyLocated').forEach(x=>x.addEventListener('change',render));
+document.querySelectorAll('#search,#minRssi').forEach(x=>x.addEventListener('input',render));
 render();
 </script></body></html>"""
 
