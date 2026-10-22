@@ -48,7 +48,9 @@ class BladeTelemetry {
     BLESecurity* security = new BLESecurity();
     security->setAuthenticationMode(ESP_LE_AUTH_REQ_SC_MITM_BOND);
     security->setCapability(ESP_IO_CAP_OUT);
-    security->setPassKey(true, pin_);
+    // Arduino-ESP32 2.0.x: configure Bluedroid GAP directly.
+    securityCallbacks_.passkey = pin_;
+    esp_ble_gap_set_security_param(ESP_BLE_SM_SET_STATIC_PASSKEY, &pin_, sizeof(pin_));
     BLEDevice::setSecurityCallbacks(&securityCallbacks_);
     Serial.printf("BLADE PAIRING CODE %06lu (first-time enrollment only)\n",
                   (unsigned long)pin_);
@@ -173,6 +175,8 @@ class BladeTelemetry {
   class SecurityCallbacks : public BLESecurityCallbacks {
    public:
     volatile bool authenticated = false;
+    uint32_t passkey = 0;
+    uint32_t onPassKeyRequest() override { return passkey; }
     void onPassKeyNotify(uint32_t passkey) override {
       Serial.printf("BLADE confirm first pairing passkey=%06lu on Blade 2\n",
                     (unsigned long)passkey);
