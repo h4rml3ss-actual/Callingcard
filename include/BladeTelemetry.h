@@ -22,9 +22,12 @@ class BladeTelemetry {
   // Details are opt-in: public unencrypted GATT. Truncated labels only; no MACs or coordinates.
   void queueDetail(char kind, int channel, int rssi, const char* label) {
     if (kind != 'W' && kind != 'B' && kind != 'L') return;
-    // Non-blocking single-slot coalescing. BLE callback never calls this method.
-    snprintf(detailPending_, sizeof(detailPending_), "D,%c,%d,%d,%.8s", kind,
-             channel, rssi, label ? label : "");
+    // Fixed-size bounded FIFO; preserve first 12 observations of each burst.
+    if (detailCount_ >= 12) { ++detailDropped_; return; }
+    snprintf(detailQueue_[detailTail_], sizeof(detailQueue_[0]), "D,%c,%d,%d,%.8s",
+             kind, channel, rssi, label ? label : "");
+    detailTail_ = (detailTail_ + 1) % 12;
+    ++detailCount_;
   }
 #endif
   bool connected() const { return callbacks_.connected; }
@@ -65,10 +68,11 @@ class BladeTelemetry {
              (unsigned long)(lora%1000), gpsFix?1:0, recording?1:0);
     status_->setValue(value);
 #if CALLINGCARD_BLADE_DETAILS
-    if (callbacks_.connected && detailPending_[0] && millis() - lastDetailMs_ >= 1000) {
-      detail_->setValue(detailPending_);
+    if (callbacks_.connected && detailCount_ && millis() - lastDetailMs_ >= 250) {
+      detail_->setValue(detailQueue_[detailHead_]);
       detail_->notify();
-      detailPending_[0] = 0;
+      detailHead_ = (detailHead_ + 1) % 12;
+      --detailCount_;
       lastDetailMs_ = millis();
     }
 #endif
@@ -111,7 +115,9 @@ class BladeTelemetry {
   BLECharacteristic* alert_ = nullptr;
 #if CALLINGCARD_BLADE_DETAILS
   BLECharacteristic* detail_ = nullptr;
-  char detailPending_[20] = {};
+  char detailQueue_[12][20] = {};
+  uint8_t detailHead_ = 0, detailTail_ = 0, detailCount_ = 0;
+  uint32_t detailDropped_ = 0;
   uint32_t lastDetailMs_ = 0;
 #endif
   char pendingSource_ = 0;
