@@ -14,6 +14,8 @@ import android.graphics.Color;
 import android.view.Gravity;
 import android.widget.TextView;
 import android.widget.LinearLayout;
+import android.graphics.Typeface;
+import android.os.SystemClock;
 import android.util.Log;
 import java.util.Arrays;
 import java.util.UUID;
@@ -29,6 +31,16 @@ public class MainActivity extends Activity {
     private BluetoothGatt gatt;
     private boolean scanning = false;
     private boolean active = false;
+    private long lastTelemetryMs = -1;
+    private int previousWifi = -1, previousBle = -1, previousLora = -1;
+    private String latestHud = "";
+    private final Runnable freshnessTicker = new Runnable() {
+        @Override public void run() {
+            if (!active) return;
+            if (lastTelemetryMs >= 0) renderHud();
+            handler.postDelayed(this, 1000);
+        }
+    };
     private final ScanCallback discovery = new ScanCallback() {
         @Override public void onScanResult(int callbackType, ScanResult result) {
             BluetoothDevice device = result.getDevice();
@@ -53,7 +65,7 @@ public class MainActivity extends Activity {
                 show("Connected\nDiscovering telemetry...");
                 if (canConnect()) client.discoverServices();
             } else if (state == BluetoothProfile.STATE_DISCONNECTED) {
-                show("Disconnected");
+                handler.post(() -> { lastTelemetryMs = -1; latestHud = ""; show("CALLINGCARD\\nLINK DISCONNECTED"); });
                 client.close();
                 if (gatt == client) gatt = null;
                 handler.postDelayed(() -> { if (active) startScan(); }, 2000);
@@ -85,11 +97,14 @@ public class MainActivity extends Activity {
         display = new TextView(this);
         display.setTextColor(Color.rgb(114, 240, 186));
         display.setBackgroundColor(Color.BLACK);
-        display.setTextSize(22);
+        display.setTextSize(20);
+        display.setTypeface(Typeface.MONOSPACE);
+        display.setPadding(20, 18, 20, 18);
         display.setGravity(Gravity.CENTER);
         display.setText("CALLINGCARD\nBlade 2 BLE proof of concept");
         setContentView(display);
         active = true;
+        handler.post(freshnessTicker);
         if (Build.VERSION.SDK_INT >= 31 &&
              (checkSelfPermission(Manifest.permission.BLUETOOTH_SCAN) != PackageManager.PERMISSION_GRANTED ||
               checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED)) {
@@ -131,11 +146,40 @@ public class MainActivity extends Activity {
     }
     private void showPayload(byte[] payload) {
         if (payload == null) return;
-        String[] p = new String(payload, StandardCharsets.UTF_8).split(",", -1);
-        if (p.length != 6 || !p[0].equals("1")) { show("Unknown telemetry version"); return; }
-        show("CALLINGCARD LINK\n\nWi-Fi: " + p[1] + "\nBLE: " + p[2] +
-             "\nLoRa RX: " + p[3] + "\nGPS fix: " + (p[4].equals("1")?"YES":"NO") +
-             "\nRecording: " + (p[5].equals("1")?"YES":"NO"));
+        final String wire = new String(payload, StandardCharsets.UTF_8);
+        handler.post(() -> {
+            String[] p = wire.split(",", -1);
+            if (p.length != 6 || !p[0].equals("1")) { show("Unsupported telemetry"); return; }
+            try {
+                int wifi = Integer.parseInt(p[1]), ble = Integer.parseInt(p[2]), lora = Integer.parseInt(p[3]);
+                if (wifi < 0 || wifi > 999 || ble < 0 || ble > 999 || lora < 0 || lora > 999 ||
+                    (!p[4].equals("0") && !p[4].equals("1")) ||
+                    (!p[5].equals("0") && !p[5].equals("1"))) throw new NumberFormatException();
+                String w = previousWifi >= 0 && wifi != previousWifi ? "*" : " ";
+                String b = previousBle >= 0 && ble != previousBle ? "*" : " ";
+                String l = previousLora >= 0 && lora != previousLora ? "*" : " ";
+                previousWifi = wifi; previousBle = ble; previousLora = lora;
+                latestHud = "Wi-Fi " + String.format(java.util.Locale.US, "%3d", wifi) + " " + w +
+                    "\nBLE   " + String.format(java.util.Locale.US, "%3d", ble) + " " + b +
+                    "\nLoRa  " + String.format(java.util.Locale.US, "%3d", lora) + " " + l +
+                    "\nGPS   " + (p[4].equals("1") ? "FIX" : "NO FIX") +
+                    "\nSD    " + (p[5].equals("1") ? "REC" : "IDLE");
+                lastTelemetryMs = SystemClock.elapsedRealtime();
+                renderHud();
+            } catch (NumberFormatException ex) {
+                Log.w(TAG, "invalid telemetry status");
+            }
+        });
+    }
+    private void renderHud() {
+        if (!active || lastTelemetryMs < 0) return;
+        long age = SystemClock.elapsedRealtime() - lastTelemetryMs;
+        String health = age < 3000 ? "LIVE" : age < 10000 ? "DELAYED" : "STALE";
+        display.setText("CALLINGCARD  " + health + "\n" +
+            "--------------------\n" + latestHud + "\n\n" +
+            (age < 3000 ? "LINK ACTIVE" : "LAST UPDATE " + (age/1000) + "s AGO"));
+        display.setTextColor(age < 3000 ? Color.rgb(114,240,186) :
+                             age < 10000 ? Color.YELLOW : Color.RED);
     }
     private void show(String text) { runOnUiThread(() -> { if (active) display.setText(text); }); }
     @Override protected void onDestroy() {
