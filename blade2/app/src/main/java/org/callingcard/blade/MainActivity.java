@@ -42,6 +42,8 @@ public class MainActivity extends Activity {
     private BluetoothGatt gatt;
     private BluetoothDevice pendingBond;
     private boolean bonding = false;
+    private boolean bondFailed = false; // No repeated PIN prompts after a failed enrollment.
+    private boolean bondingRegistered = false;
     private final BroadcastReceiver bondReceiver = new BroadcastReceiver() {
         @Override public void onReceive(Context context, Intent intent) {
             if (!BluetoothDevice.ACTION_BOND_STATE_CHANGED.equals(intent.getAction())) return;
@@ -51,11 +53,12 @@ public class MainActivity extends Activity {
             Log.i(TAG,"bond state="+state);
             if(state==BluetoothDevice.BOND_BONDED) {
                 bonding=false;
+                bondFailed=false;
                 connectPaired(device);
             } else if(state==BluetoothDevice.BOND_NONE) {
                 bonding=false;pendingBond=null;
-                show("PAIRING FAILED: verify PIN and retry");
-                handler.postDelayed(() -> {if(active)startScan();},5000);
+                bondFailed=true;
+                show("PAIRING FAILED - restart app to retry");
             }
         }
     };
@@ -84,7 +87,21 @@ public class MainActivity extends Activity {
             stopScan();
             if (!active || !canConnect()) return;
             show("Blade 2 HUD\nConnecting...");
-            gatt = device.connectGatt(MainActivity.this, false, callback, BluetoothDevice.TRANSPORT_LE);
+            // Never bypass bond enrollment: connecting unbonded triggered repeated
+            // system PIN prompts and raced the separate bond receiver.
+            if (bondFailed || bonding) return;
+            pendingBond=device;
+            if (device.getBondState()==BluetoothDevice.BOND_BONDED) {
+                connectPaired(device);
+            } else {
+                bonding=true;
+                show("PAIR ONCE: enter Cardputer PIN");
+                if (!device.createBond()) {
+                    bonding=false;
+                    bondFailed=true;
+                    show("PAIRING COULD NOT START - restart app");
+                }
+            }
         }
         @Override public void onScanFailed(int errorCode) { Log.e(TAG, "scan failed " + errorCode); show("BLE scan failed: " + errorCode); scanning = false; }
     };
@@ -161,6 +178,7 @@ public class MainActivity extends Activity {
         setContentView(graphical);
         active = true;
         registerReceiver(bondReceiver,new IntentFilter(BluetoothDevice.ACTION_BOND_STATE_CHANGED));
+        bondingRegistered=true;
         handler.post(freshnessTicker);
         if (Build.VERSION.SDK_INT >= 31 &&
              (checkSelfPermission(Manifest.permission.BLUETOOTH_SCAN) != PackageManager.PERMISSION_GRANTED ||
@@ -182,7 +200,7 @@ public class MainActivity extends Activity {
         return Build.VERSION.SDK_INT < 31 || checkSelfPermission(Manifest.permission.BLUETOOTH_SCAN) == PackageManager.PERMISSION_GRANTED;
     }
     private void startScan() {
-        if (!active || scanning || !canScan()) return;
+        if (!active || scanning || bonding || bondFailed || gatt!=null || !canScan()) return;
         BluetoothManager manager = (BluetoothManager)getSystemService(Context.BLUETOOTH_SERVICE);
         BluetoothAdapter adapter = manager == null ? null : manager.getAdapter();
         if (adapter == null || !adapter.isEnabled()) { show("Enable Bluetooth on Blade 2"); return; }
@@ -325,7 +343,7 @@ public class MainActivity extends Activity {
         active = false;
         stopScan();
         handler.removeCallbacksAndMessages(null);
-        unregisterReceiver(bondReceiver);
+        if (bondingRegistered) unregisterReceiver(bondReceiver);
         if (gatt != null && canConnect()) { gatt.disconnect(); gatt.close(); gatt = null; }
         super.onDestroy();
     }
