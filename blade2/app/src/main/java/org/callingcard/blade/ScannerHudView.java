@@ -25,6 +25,12 @@ public final class ScannerHudView extends View {
     // Keep raw Wi-Fi sightings for the 120-second channel histogram.
     final ArrayDeque<Item> wifiSamples = new ArrayDeque<>();
     int page=0, wifi=0, ble=0, lora=0;
+    // Observation ages are based on receipt time, not proof of RF disappearance.
+    private static final long RECENT_WIFI_MS=120000;
+    private static final long RECENT_BLE_MS=180000;
+    private static final long RETAIN_MS=900000;
+    private boolean showOld=true;
+    private String selectedKey=null;
     private int selection=0;
     private boolean detailOpen=false;
     private Item selectedItem=null;
@@ -44,6 +50,11 @@ public final class ScannerHudView extends View {
         if(index<0) return;
         long now=android.os.SystemClock.elapsedRealtime();
         ArrayDeque<Item> q=items[index];
+        // Prune old rows without changing the independent histogram sample window.
+        Iterator<Item> expired=q.iterator();
+        while(expired.hasNext()) {
+            if(now-expired.next().timestamp>RETAIN_MS) expired.remove();
+        }
         ArrayDeque<Integer> prior=null;
         for(Item old:q) {
             if(index!=2 && name!=null && !name.equals("<unnamed BLE>") &&
@@ -76,11 +87,25 @@ public final class ScannerHudView extends View {
             selectedItem=updated;
         invalidate();
     }
-    void next(int delta) { if(detailOpen)return; page=(page+delta+4)%4; selection=0;invalidate(); }
+    void next(int delta) { if(detailOpen)return; page=(page+delta+4)%4; selection=0;selectedKey=null;invalidate(); }
+    boolean toggleOld() {
+        if(page==0||detailOpen)return false;
+        showOld=!showOld;
+        selection=0;selectedKey=null;invalidate();return true;
+    }
+    private long recentThreshold() {return page==1?RECENT_WIFI_MS:page==2?RECENT_BLE_MS:RETAIN_MS;}
+    private String identityKey(Item item) {
+        return (page==1?"W:"+item.channel+":":page==2?"B:":"L:")+item.name;
+    }
     private ArrayList<Item> newestFirst() {
         ArrayList<Item> result=new ArrayList<>();
         if(page==0)return result;
-        for(Item item:items[page-1]) result.add(0,item);
+        long now=android.os.SystemClock.elapsedRealtime();
+        for(Item item:items[page-1]) {
+            if(now-item.timestamp>RETAIN_MS)continue;
+            if(!showOld && now-item.timestamp>recentThreshold())continue;
+            result.add(0,item);
+        }
         return result;
     }
     boolean moveSelection(int delta) {
@@ -88,6 +113,7 @@ public final class ScannerHudView extends View {
         ArrayList<Item> list=newestFirst();
         if(list.isEmpty())return true;
         selection=Math.max(0,Math.min(list.size()-1,selection+delta));
+        selectedKey=identityKey(list.get(selection));
         invalidate();return true;
     }
     boolean openSelected() {
@@ -96,6 +122,7 @@ public final class ScannerHudView extends View {
         if(list.isEmpty())return true;
         selection=Math.min(selection,list.size()-1);
         selectedItem=list.get(selection);selectedSource=page;detailOpen=true;
+        selectedKey=identityKey(selectedItem);
         invalidate();return true;
     }
     boolean back() {
@@ -137,7 +164,9 @@ public final class ScannerHudView extends View {
             Item item=selectedItem;
             txt(c,"OBSERVATION DETAIL",28,149,24,green);
             txt(c,"SOURCE "+new String[]{"Wi-Fi","BLE","LoRa"}[selectedSource-1],28,195,23,white);
-            txt(c,"NAME (received)",28,238,18,dim);
+            boolean uncertain=selectedSource!=3 &&
+                (item.name.equals("<hidden>") || item.name.equals("<unnamed BLE>") || item.name.isEmpty());
+            txt(c,uncertain?"IDENTITY UNKNOWN":"NAME-BASED MATCH",28,238,16,Color.YELLOW);
             String n=item.name==null?"":item.name;
             for(int pos=0;pos<n.length()&&pos<60;pos+=19)
                 txt(c,n.substring(pos,Math.min(n.length(),pos+19)),28,270+(pos/19)*26,20,white);
@@ -151,7 +180,9 @@ public final class ScannerHudView extends View {
             }
             drawSignalTrend(c,item,28,380,420,44,green,dim);
             long age=Math.max(0,(android.os.SystemClock.elapsedRealtime()-item.timestamp)/1000);
-            txt(c,"SEEN "+age+"s   SAMPLES "+item.history.size(),28,446,15,dim);
+            boolean recent=selectedSource==1?age*1000<RECENT_WIFI_MS:
+                           selectedSource==2?age*1000<RECENT_BLE_MS:age*1000<RETAIN_MS;
+            txt(c,(recent?"RECENT ":"OLD ")+age+"s  SAMPLES "+item.history.size(),28,446,15,recent?green:Color.YELLOW);
 
             c.restore();return;
         }
@@ -179,6 +210,11 @@ public final class ScannerHudView extends View {
         }
         if(page>0) {
             ArrayList<Item> recent=newestFirst();
+            if(page!=3) txt(c,showOld?"ALL (UP toggles)":"RECENT (UP toggles)",27,page==1?377:167,14,dim);
+            if(selectedKey!=null) {
+                for(int i=0;i<recent.size();i++)
+                    if(identityKey(recent.get(i)).equals(selectedKey)) {selection=i;break;}
+            }
             int maxLines=page==1?3:6;
             selection=Math.max(0,Math.min(selection,Math.max(0,recent.size()-1)));
             int windowStart=Math.max(0,selection-maxLines+1);
@@ -196,13 +232,15 @@ public final class ScannerHudView extends View {
                 int maxWidth=page==1?275:260;
                 while(name.length()>1 && p.measureText(name)>maxWidth) name=name.substring(0,name.length()-1);
                 if(!name.equals(item.name) && name.length()>1) name=name.substring(0,name.length()-1)+"…";
-                txt(c,name,27,y,nameSize,white);
+                long ageMs=android.os.SystemClock.elapsedRealtime()-item.timestamp;
+                boolean old=ageMs>(page==1?RECENT_WIFI_MS:page==2?RECENT_BLE_MS:RETAIN_MS);
+                txt(c,name,27,y,nameSize,old?dim:white);
                 String extra=page==1?"ch"+item.channel+" "+item.rssi+"dBm":
                     page==2?item.rssi+"dBm":"RX";
-                txt(c,extra,320,y,page==1?15:18,green);
+                txt(c,extra,320,y,page==1?15:18,old?dim:green);
             }
         }
-        if(!alert.isEmpty()) txt(c,alert.length()>30?alert.substring(0,30):alert,28,453,18,Color.YELLOW);
+        if(!alert.isEmpty() && page==0) txt(c,alert.length()>30?alert.substring(0,30):alert,28,453,18,Color.YELLOW);
         c.restore();
     }
 }
