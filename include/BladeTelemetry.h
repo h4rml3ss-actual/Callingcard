@@ -10,6 +10,7 @@ class BladeTelemetry {
  public:
   static constexpr const char* serviceUuid() { return "cabb1e00-ccad-4abc-a112-24fc00000001"; }
   static constexpr const char* statusUuid() { return "cabb1e00-ccad-4abc-a112-24fc00000002"; }
+  bool connected() const { return callbacks_.connected; }
   void begin() {
     Serial.printf("BLADE init service=%s\n", serviceUuid());
     server_ = BLEDevice::createServer();
@@ -38,9 +39,10 @@ class BladeTelemetry {
              (unsigned long)(lora%1000), gpsFix?1:0, recording?1:0);
     status_->setValue(value);
     if (callbacks_.connected) {
+      ++notificationAttempts_;
       status_->notify();
       if (millis() - lastLogMs_ >= 10000) {
-        Serial.printf("BLADE connected=1 notify=%s\n", value);
+        Serial.printf("BLADE connected=1 notify=%s attempts=%lu\n", value, (unsigned long)notificationAttempts_);
         lastLogMs_ = millis();
       }
     }
@@ -65,6 +67,7 @@ class BladeTelemetry {
   bool hadConnection_ = false;
   uint32_t lastMs_ = 0;
   uint32_t lastLogMs_ = 0;
+  uint32_t notificationAttempts_ = 0;
 };
 }
 #endif
