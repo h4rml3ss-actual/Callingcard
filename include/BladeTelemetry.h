@@ -11,6 +11,7 @@ class BladeTelemetry {
   static constexpr const char* serviceUuid() { return "cabb1e00-ccad-4abc-a112-24fc00000001"; }
   static constexpr const char* statusUuid() { return "cabb1e00-ccad-4abc-a112-24fc00000002"; }
   void begin() {
+    Serial.printf("BLADE init service=%s\n", serviceUuid());
     server_ = BLEDevice::createServer();
     server_->setCallbacks(&callbacks_);
     BLEService* service = server_->createService(serviceUuid());
@@ -21,8 +22,11 @@ class BladeTelemetry {
     service->start();
     BLEAdvertising* advertising = BLEDevice::getAdvertising();
     advertising->addServiceUUID(serviceUuid());
-    advertising->setScanResponse(false);
+    advertising->setScanResponse(true);
+    advertising->setMinPreferred(0x06);
+    advertising->setMinPreferred(0x12);
     BLEDevice::startAdvertising();
+    Serial.println("BLADE advertising_started=1");
   }
   void tick(uint32_t wifi, uint32_t ble, uint32_t lora, bool gpsFix, bool recording) {
     if (millis()-lastMs_ < 1000) return;
@@ -33,9 +37,19 @@ class BladeTelemetry {
              (unsigned long)(wifi%1000),(unsigned long)(ble%1000),
              (unsigned long)(lora%1000), gpsFix?1:0, recording?1:0);
     status_->setValue(value);
-    if (callbacks_.connected) status_->notify();
+    if (callbacks_.connected) {
+      status_->notify();
+      if (millis() - lastLogMs_ >= 10000) {
+        Serial.printf("BLADE connected=1 notify=%s\n", value);
+        lastLogMs_ = millis();
+      }
+    }
     if (!callbacks_.connected && hadConnection_) {
       server_->startAdvertising();
+      Serial.println("BLADE advertising_restarted=1");
+    }
+    if (callbacks_.connected != hadConnection_) {
+      Serial.printf("BLADE connection_changed=%u\n", callbacks_.connected ? 1 : 0);
     }
     hadConnection_ = callbacks_.connected;
   }
@@ -50,6 +64,7 @@ class BladeTelemetry {
   BLECharacteristic* status_ = nullptr;
   bool hadConnection_ = false;
   uint32_t lastMs_ = 0;
+  uint32_t lastLogMs_ = 0;
 };
 }
 #endif
