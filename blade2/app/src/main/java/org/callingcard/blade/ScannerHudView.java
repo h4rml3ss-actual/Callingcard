@@ -19,6 +19,10 @@ public final class ScannerHudView extends View {
     // Keep raw Wi-Fi sightings for the 120-second channel histogram.
     final ArrayDeque<Item> wifiSamples = new ArrayDeque<>();
     int page=0, wifi=0, ble=0, lora=0;
+    private int selection=0;
+    private boolean detailOpen=false;
+    private Item selectedItem=null;
+    private int selectedSource=0;
     boolean gps=false, recording=false;
     String health="SEARCHING", alert="";
     private final Paint p = new Paint(3);
@@ -54,9 +58,37 @@ public final class ScannerHudView extends View {
         }
         if(q.size()>=32) q.removeFirst();
         q.addLast(updated);
+        if(detailOpen && selectedItem!=null && selectedSource==index+1 &&
+            selectedItem.name.equals(name) && (index!=0||selectedItem.channel==channel))
+            selectedItem=updated;
         invalidate();
     }
-    void next(int delta) { page=(page+delta+4)%4;invalidate(); }
+    void next(int delta) { if(detailOpen)return; page=(page+delta+4)%4; selection=0;invalidate(); }
+    private ArrayList<Item> newestFirst() {
+        ArrayList<Item> result=new ArrayList<>();
+        if(page==0)return result;
+        for(Item item:items[page-1]) result.add(0,item);
+        return result;
+    }
+    boolean moveSelection(int delta) {
+        if(page==0||detailOpen)return false;
+        ArrayList<Item> list=newestFirst();
+        if(list.isEmpty())return true;
+        selection=Math.max(0,Math.min(list.size()-1,selection+delta));
+        invalidate();return true;
+    }
+    boolean openSelected() {
+        if(page==0||detailOpen)return false;
+        ArrayList<Item> list=newestFirst();
+        if(list.isEmpty())return true;
+        selection=Math.min(selection,list.size()-1);
+        selectedItem=list.get(selection);selectedSource=page;detailOpen=true;
+        invalidate();return true;
+    }
+    boolean back() {
+        if(!detailOpen)return false;
+        detailOpen=false;selectedItem=null;invalidate();return true;
+    }
     private void txt(Canvas c, String s,float x,float y,float size,int color) {
         p.setColor(color);p.setStrokeWidth(1);p.setStyle(Paint.Style.FILL);
         p.setTypeface(android.graphics.Typeface.MONOSPACE);p.setTextSize(size);c.drawText(s,x,y,p);
@@ -76,6 +108,21 @@ public final class ScannerHudView extends View {
         txt(c,health,320,52,22,tint());
         txt(c,"<  "+new String[]{"OVERVIEW","Wi-Fi","BLE","LoRa"}[page]+"  >",30,96,26,white);
         p.setColor(dim);c.drawRect(26,112,454,114,p);
+        if(detailOpen && selectedItem!=null) {
+            Item item=selectedItem;
+            txt(c,"OBSERVATION DETAIL",28,149,24,green);
+            txt(c,"SOURCE "+new String[]{"Wi-Fi","BLE","LoRa"}[selectedSource-1],28,195,23,white);
+            txt(c,"NAME (received)",28,238,18,dim);
+            String n=item.name==null?"":item.name;
+            for(int pos=0;pos<n.length()&&pos<60;pos+=19)
+                txt(c,n.substring(pos,Math.min(n.length(),pos+19)),28,270+(pos/19)*26,20,white);
+            if(selectedSource==1)txt(c,"CHANNEL "+item.channel,28,355,22,white);
+            if(selectedSource!=3)txt(c,"RSSI "+item.rssi+" dBm",28,385,22,white);
+            long age=Math.max(0,(android.os.SystemClock.elapsedRealtime()-item.timestamp)/1000);
+            txt(c,"LAST SEEN "+age+"s",28,419,18,dim);
+            txt(c,"BACK to scanner",28,451,17,green);
+            c.restore();return;
+        }
         if(page==0) {
             txt(c,"Wi-Fi "+wifi,35,166,32,green);
             txt(c,"BLE   "+ble,35,212,32,green);
@@ -99,16 +146,21 @@ public final class ScannerHudView extends View {
             txt(c,page==2?"RECENT BLE ADVERTISEMENTS":"RECENT LoRa RX",27,148,22,white);
         }
         if(page>0) {
-            ArrayDeque<Item> q=items[page-1];
-            ArrayList<Item> recent=new ArrayList<>(q);
-            int maxLines=page==1?3:6, row=0;
-            for(int i=recent.size()-1;i>=0 && row<maxLines;i--,row++) {
-                Item item=recent.get(i);
-                String name=item.name;
+            ArrayList<Item> recent=newestFirst();
+            int maxLines=page==1?3:6;
+            selection=Math.max(0,Math.min(selection,Math.max(0,recent.size()-1)));
+            int windowStart=Math.max(0,selection-maxLines+1);
+            for(int row=0;row<maxLines && windowStart+row<recent.size();row++) {
+                int index=windowStart+row;
+                Item item=recent.get(index);
                 int y=page==1?398+row*23:186+row*37;
+                if(index==selection) {
+                    p.setColor(Color.rgb(48,88,68));
+                    c.drawRoundRect(21,y-(page==1?18:25),454,y+5,5,5,p);
+                }
+                String name=item.name==null?"":item.name;
                 float nameSize=page==1?17:20;
-                p.setTypeface(android.graphics.Typeface.MONOSPACE);
-                p.setTextSize(nameSize);
+                p.setTypeface(android.graphics.Typeface.MONOSPACE);p.setTextSize(nameSize);
                 int maxWidth=page==1?275:260;
                 while(name.length()>1 && p.measureText(name)>maxWidth) name=name.substring(0,name.length()-1);
                 if(!name.equals(item.name) && name.length()>1) name=name.substring(0,name.length()-1)+"…";
