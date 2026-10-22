@@ -294,6 +294,10 @@ void drainBleSamples(uint8_t maximum = 8) {
     if (!hasSample) return;
     if (latestCount < kMaxLines) latest[latestCount++] = snapshot;
     pipeline.enqueue(snapshot); // Already tagged at callback time, never re-annotate.
+#if CALLINGCARD_BLADE_DETAILS
+    // BLE callbacks use the fixed prequeue; forward from main loop so the HUD sees them.
+    blade.queueDetail('B', 0, snapshot.rssiDbm, snapshot.label);
+#endif
   }
 }
 volatile bool bleDone = false;
