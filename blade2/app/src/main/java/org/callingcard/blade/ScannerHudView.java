@@ -164,7 +164,9 @@ public final class ScannerHudView extends View {
             Item item=selectedItem;
             txt(c,"OBSERVATION DETAIL",28,149,24,green);
             txt(c,"SOURCE "+new String[]{"Wi-Fi","BLE","LoRa"}[selectedSource-1],28,195,23,white);
-            txt(c,"NAME (received)",28,238,18,dim);
+            boolean uncertain=selectedSource!=3 &&
+                (item.name.equals("<hidden>") || item.name.equals("<unnamed BLE>") || item.name.isEmpty());
+            txt(c,uncertain?"IDENTITY UNKNOWN":"NAME-BASED MATCH",28,238,16,Color.YELLOW);
             String n=item.name==null?"":item.name;
             for(int pos=0;pos<n.length()&&pos<60;pos+=19)
                 txt(c,n.substring(pos,Math.min(n.length(),pos+19)),28,270+(pos/19)*26,20,white);
