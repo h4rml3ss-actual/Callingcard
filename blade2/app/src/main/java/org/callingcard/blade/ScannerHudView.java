@@ -16,6 +16,8 @@ public final class ScannerHudView extends View {
         Item(String n, int c, int r, long t) { name=n;channel=c;rssi=r;timestamp=t; }
     }
     final ArrayDeque<Item>[] items;
+    // Keep raw Wi-Fi sightings for the 120-second channel histogram.
+    final ArrayDeque<Item> wifiSamples = new ArrayDeque<>();
     int page=0, wifi=0, ble=0, lora=0;
     boolean gps=false, recording=false;
     String health="SEARCHING", alert="";
@@ -30,9 +32,28 @@ public final class ScannerHudView extends View {
     void add(char source, int channel, int rssi, String name) {
         int index = source=='W'?0:source=='B'?1:source=='L'?2:-1;
         if(index<0) return;
+        long now=android.os.SystemClock.elapsedRealtime();
+        Item updated=new Item(name,channel,rssi,now);
+        if(index==0) {
+            while(!wifiSamples.isEmpty() && now-wifiSamples.peekFirst().timestamp>120000)
+                wifiSamples.removeFirst();
+            if(wifiSamples.size()>=256) wifiSamples.removeFirst();
+            wifiSamples.addLast(updated);
+        }
         ArrayDeque<Item> q=items[index];
+        // Same SSID/channel is one displayed Wi-Fi row; same advertised BLE name
+        // is one row because our BLE wire payload has no device address.
+        // Placeholder/unnamed advertisements are not uniquely identifiable.
+        if(index!=2 && name!=null && !name.isEmpty() &&
+                !name.equals("<unnamed BLE>") && !name.equals("<hidden>")) {
+            Iterator<Item> it=q.iterator();
+            while(it.hasNext()) {
+                Item old=it.next();
+                if(old.name.equals(name) && (index==1 || old.channel==channel)) it.remove();
+            }
+        }
         if(q.size()>=32) q.removeFirst();
-        q.addLast(new Item(name,channel,rssi,android.os.SystemClock.elapsedRealtime()));
+        q.addLast(updated);
         invalidate();
     }
     void next(int delta) { page=(page+delta+4)%4;invalidate(); }
@@ -65,7 +86,7 @@ public final class ScannerHudView extends View {
             txt(c,"2.4 GHz CHANNEL ACTIVITY",28,148,20,white);
             int[] counts=new int[14];
             long now=android.os.SystemClock.elapsedRealtime();
-            for(Item item:items[0]) if(item.channel>=1 && item.channel<=14 && now-item.timestamp<120000) counts[item.channel-1]++;
+            for(Item item:wifiSamples) if(item.channel>=1 && item.channel<=14 && now-item.timestamp<120000) counts[item.channel-1]++;
             int max=1;for(int count:counts) max=Math.max(max,count);
             for(int i=0;i<14;i++) {
                 float x=28+i*30;
