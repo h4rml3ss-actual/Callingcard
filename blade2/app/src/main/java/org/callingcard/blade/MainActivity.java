@@ -276,7 +276,16 @@ public class MainActivity extends Activity {
     @Override public boolean onKeyDown(int keyCode, KeyEvent event) {
         if(keyCode==KeyEvent.KEYCODE_DPAD_RIGHT) { graphical.next(1); return true; }
         if(keyCode==KeyEvent.KEYCODE_DPAD_LEFT) { graphical.next(-1); return true; }
+        if(keyCode==KeyEvent.KEYCODE_DPAD_DOWN) return graphical.moveSelection(1);
+        if(keyCode==KeyEvent.KEYCODE_DPAD_UP) return graphical.moveSelection(-1);
+        if(keyCode==KeyEvent.KEYCODE_DPAD_CENTER || keyCode==KeyEvent.KEYCODE_ENTER)
+            return graphical.openSelected();
+        if(keyCode==KeyEvent.KEYCODE_BACK && graphical.back()) return true;
         return super.onKeyDown(keyCode,event);
+    }
+    @Override public void onBackPressed() {
+        if(graphical.back()) return;
+        super.onBackPressed();
     }
     private void show(String text) { runOnUiThread(() -> {
         if (active) { display.setText(text); if(graphical!=null) { graphical.health=text; graphical.invalidate(); } }
