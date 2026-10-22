@@ -78,6 +78,11 @@ void closeSession() {
   if (sessionFile) {
     sessionFile.flush();
     lastSessionBytes = sessionFile.size();
+    if (lastSessionBytes == UINT32_MAX) {
+      ++sdErrors;
+      Serial.println("SD ERROR reason=INVALID_FILE_SIZE value=UINT32_MAX");
+      lastSessionBytes = 0;
+    }
     sessionFile.close();
   }
 }
@@ -163,7 +168,12 @@ void serviceStorage() {
     storageError("WRITE_FAILED");
     return;
   }
-  if (sessionFile.size() >= kMaxSessionBytes) {
+  const uint32_t measuredBytes = sessionFile.size();
+  if (measuredBytes == UINT32_MAX) {
+    storageError("INVALID_FILE_SIZE");
+    return;
+  }
+  if (measuredBytes >= kMaxSessionBytes) {
     closeSession();
     sessionState = SessionState::Limit;
     sessionStats.finish(millis(), pipeline.dropped(), bleLossForSummary);
@@ -489,6 +499,12 @@ void beginSurvey() {
     }
     scanMode = ScanMode::Wifi;
   } else {
+#if CALLINGCARD_BLADE_GATT_ONLY
+    Serial.println("BLADE survey_ble_skipped=1 gatt_only=1");
+    scanWifiNext = true;
+    nextScanMs = millis() + kPauseMs;
+    return;
+#endif
     portENTER_CRITICAL(&bleMux);
     bleDone = false;
     bleHead = bleTail = bleSampleCount = 0;
@@ -576,6 +592,9 @@ void setup() {
   WiFi.mode(WIFI_STA);
   WiFi.disconnect();
   BLEDevice::init("Callingcard");
+#if CALLINGCARD_BLADE_GATT_ONLY
+  Serial.println("BLADE mode=GATT_ONLY ble_survey_disabled=1");
+#endif
 #if CALLINGCARD_BLADE_POC
   blade.begin();
 #endif
