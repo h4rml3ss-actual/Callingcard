@@ -276,6 +276,7 @@ public class MainActivity extends Activity {
     @Override public boolean onKeyDown(int keyCode, KeyEvent event) {
         if(keyCode==KeyEvent.KEYCODE_DPAD_RIGHT) { graphical.next(1); return true; }
         if(keyCode==KeyEvent.KEYCODE_DPAD_LEFT) { graphical.next(-1); return true; }
+        if(keyCode==KeyEvent.KEYCODE_MENU) return graphical.toggleOld();
         if(keyCode==KeyEvent.KEYCODE_DPAD_DOWN) return graphical.moveSelection(1);
         if(keyCode==KeyEvent.KEYCODE_DPAD_UP) return graphical.moveSelection(-1);
         if(keyCode==KeyEvent.KEYCODE_DPAD_CENTER || keyCode==KeyEvent.KEYCODE_ENTER)
