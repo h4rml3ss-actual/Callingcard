@@ -108,8 +108,12 @@ class BladeTelemetry {
     // Temporary development reminder: USB serial only, not GATT.
     if (!secureReady && millis() - lastPinReminderMs_ >= 15000) {
       lastPinReminderMs_ = millis();
-      Serial.printf("BLADE PAIRING CODE %06lu | waiting for Blade authentication\n",
-                    (unsigned long)pin_);
+      const uint32_t currentCode = securityCallbacks_.notifiedPasskey
+        ? securityCallbacks_.displayedPasskey : pin_;
+      Serial.printf("BLADE PAIRING CODE %06lu | %s\n",
+                    (unsigned long)currentCode,
+                    securityCallbacks_.notifiedPasskey
+                      ? "active pairing code (from BLE stack)" : "configured code; awaiting pairing");
     }
 #endif
     lastMs_ = millis();
@@ -186,8 +190,14 @@ class BladeTelemetry {
       Serial.println("BLADE AUTH event=passkey_request");
       return passkey;
     }
+    volatile uint32_t displayedPasskey = 0;
+    volatile bool notifiedPasskey = false;
     void onPassKeyNotify(uint32_t passkey) override {
-      Serial.println("BLADE AUTH event=passkey_notify (use locally displayed pairing code)");
+      // Show the actual passkey supplied by Bluedroid for this pairing attempt.
+      displayedPasskey = passkey;
+      notifiedPasskey = true;
+      Serial.printf("BLADE AUTH event=passkey_notify pairing_code=%06lu (enter on Blade)\n",
+                    (unsigned long)passkey);
     }
     bool onSecurityRequest() override {
       Serial.println("BLADE AUTH event=security_request");
@@ -200,6 +210,7 @@ class BladeTelemetry {
     }
     void onAuthenticationComplete(esp_ble_auth_cmpl_t result) override {
       authenticated = result.success && ((result.auth_mode & ESP_LE_AUTH_REQ_MITM) != 0);
+      notifiedPasskey = false;
       Serial.printf("BLADE secure_auth=%u success=%u mode=%u fail_reason=%u\n",
          authenticated?1:0, result.success?1:0,
          (unsigned)result.auth_mode, (unsigned)result.fail_reason);
