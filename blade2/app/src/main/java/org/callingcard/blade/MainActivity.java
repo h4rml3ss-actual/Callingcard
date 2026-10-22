@@ -102,19 +102,32 @@ public class MainActivity extends Activity {
     };
     private final BluetoothGattCallback callback = new BluetoothGattCallback() {
         @Override public void onConnectionStateChange(BluetoothGatt client, int status, int state) {
-            Log.i(TAG, "connection state=" + state + " status=" + status + " bond=" + client.getDevice().getBondState());
-            if (state == BluetoothProfile.STATE_CONNECTED) {
-                show("Connected\nDiscovering telemetry...");
-                if (canConnect()) {
-                    // Request a larger ATT MTU before service discovery so names fit.
-                    if (!client.requestMtu(100)) client.discoverServices();
+            Log.i(TAG, "connection state="+state+" status="+status+" bond="+client.getDevice().getBondState());
+            if (state == BluetoothProfile.STATE_CONNECTED && status == BluetoothGatt.GATT_SUCCESS) {
+                if (!canConnect()) return;
+                final int bond = client.getDevice().getBondState();
+                if (bond == BluetoothDevice.BOND_BONDED) {
+                    Log.i(TAG, "SMP already_bonded=1; beginning discovery");
+                    beginServiceDiscovery(client);
+                } else if (bond == BluetoothDevice.BOND_BONDING) {
+                    bonding = true;
+                    Log.i(TAG, "SMP bonding_in_progress=1");
+                } else if (!bonding && !bondFailed) {
+                    bonding = true;
+                    pendingBond = client.getDevice();
+                    Log.i(TAG, "SMP bond_request=1");
+                    show("PAIR ONCE: enter Cardputer PIN");
+                    if (!pendingBond.createBond()) {
+                        bonding=false; bondFailed=true;
+                        show("PAIRING COULD NOT START - restart app");
+                    }
                 }
             } else if (state == BluetoothProfile.STATE_DISCONNECTED) {
-                Log.w(TAG,"BLE disconnected, gattStatus="+status);
-                handler.post(() -> { lastTelemetryMs = -1; latestHud = ""; lastAlert = ""; lastAlertSequence = -1; show("CALLINGCARD\\nLINK DISCONNECTED"); });
+                Log.w(TAG, "BLE disconnected, gattStatus="+status);
+                handler.post(() -> { lastTelemetryMs=-1; latestHud=""; lastAlert=""; lastAlertSequence=-1; show("CALLINGCARD LINK DISCONNECTED"); });
                 client.close();
                 if (gatt == client) gatt = null;
-                handler.postDelayed(() -> { if (active) startScan(); }, 2000);
+                handler.postDelayed(() -> { if(active && !bondFailed) startScan(); }, 2000);
             }
         }
         @Override public void onMtuChanged(BluetoothGatt client, int mtu, int status) {
@@ -214,6 +227,11 @@ public class MainActivity extends Activity {
     private void beginServiceDiscovery(BluetoothGatt client) {
         if (!active || !canConnect() || client==null || !linkConnected) return;
         // ATT characteristic permissions remain MITM-protected on Cardputer.
+        if (!client.requestMtu(100)) client.discoverServices();
+    }
+    private void beginServiceDiscovery(BluetoothGatt client) {
+        if (!active || !canConnect() || client==null) return;
+        Log.i(TAG, "SMP authenticated_bond=1; starting GATT discovery");
         if (!client.requestMtu(100)) client.discoverServices();
     }
     private void connectPaired(BluetoothDevice device) {

@@ -511,6 +511,12 @@ void drawStatus(const char* mode) {
 
 void beginSurvey() {
   if (scanMode != ScanMode::Idle) return;
+#if CALLINGCARD_BLADE_PAIRING_QUIET
+  if (blade.connected() && !blade.authorized()) {
+    nextScanMs = millis() + kPauseMs;
+    return;
+  }
+#endif
   latestCount = 0;
   scanStartedMs = millis();
   ++scanNumber;
@@ -565,6 +571,18 @@ void beginSurvey() {
   scanWifiNext = !scanWifiNext;
 }
 void serviceSurvey() {
+#if CALLINGCARD_BLADE_PAIRING_QUIET
+  // If Android connects during an asynchronous Wi-Fi scan, cancel it
+  // before the security handshake proceeds; don't process partial results.
+  if (scanMode == ScanMode::Wifi && blade.connected() && !blade.authorized()) {
+    WiFi.scanDelete();
+    scanMode = ScanMode::Idle;
+    scanWifiNext = true;
+    nextScanMs = millis() + kPauseMs;
+    Serial.println("BLADE SMP wifi_survey_cancelled=1");
+    return;
+  }
+#endif
 #if CALLINGCARD_BLADE_SECURE
   // Pairing requires a quiet BLE controller. If security is renegotiated or
   // lost during a survey, cancel it before continuing the main loop.
@@ -735,6 +753,15 @@ void loop() {
     // Give the BLE link time to settle after authentication succeeds.
     if (authenticatedNow) nextCoexBleMs = millis() + 30000;
     priorAuthorized = authenticatedNow;
+  }
+#endif
+#if CALLINGCARD_BLADE_PAIRING_QUIET
+  static int priorQuiet = -1;
+  const int quiet = blade.connected() && !blade.authorized() ? 1 : 0;
+  if (quiet != priorQuiet) {
+    Serial.printf("BLADE SMP wifi_surveys_suspended=%d connected=%d authorized=%d\n",
+                  quiet, blade.connected()?1:0, blade.authorized()?1:0);
+    priorQuiet = quiet;
   }
 #endif
   serviceSurvey();
