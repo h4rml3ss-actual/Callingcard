@@ -533,7 +533,11 @@ void beginSurvey() {
 #if CALLINGCARD_BLADE_COEXIST
     // A connected-first test: do not interrupt advertising while searching for Blade.
     // After connection, allow brief, infrequent survey windows.
-    if (!blade.connected() || (int32_t)(millis() - nextCoexBleMs) < 0) {
+    if (!blade.connected()
+#if CALLINGCARD_BLADE_SECURE
+        || !blade.authorized()
+#endif
+        || (int32_t)(millis() - nextCoexBleMs) < 0) {
       ++coexSkips;
       scanWifiNext = true;
       nextScanMs = millis() + kPauseMs;
@@ -561,6 +565,24 @@ void beginSurvey() {
   scanWifiNext = !scanWifiNext;
 }
 void serviceSurvey() {
+#if CALLINGCARD_BLADE_SECURE
+  // Pairing requires a quiet BLE controller. If security is renegotiated or
+  // lost during a survey, cancel it before continuing the main loop.
+  if (scanMode == ScanMode::Ble && !blade.authorized()) {
+    bleScanner->stop();
+    portENTER_CRITICAL(&bleMux);
+    bleDone = false;
+    bleHead = bleTail = bleSampleCount = 0;
+    bleResultCount = 0;
+    portEXIT_CRITICAL(&bleMux);
+    bleScanner->clearResults();
+    scanMode = ScanMode::Idle;
+    scanWifiNext = true;
+    nextScanMs = millis() + kPauseMs;
+    Serial.println("BLADE COEX ble_survey_cancelled=1 reason=not_authenticated");
+    return;
+  }
+#endif
   if (scanMode == ScanMode::Wifi) {
     const int found = WiFi.scanComplete();
     if (found == WIFI_SCAN_RUNNING) {
@@ -704,6 +726,17 @@ void loop() {
     cap.logStatus();
     nextCapLogMs = millis() + 10000;
   }
+#if CALLINGCARD_BLADE_SECURE
+  static bool priorAuthorized = false;
+  const bool authenticatedNow = blade.authorized();
+  if (authenticatedNow != priorAuthorized) {
+    Serial.printf("BLADE COEX auth=%u ble_survey=%s\n",
+                  authenticatedNow?1:0, authenticatedNow?"enabled":"suspended");
+    // Give the BLE link time to settle after authentication succeeds.
+    if (authenticatedNow) nextCoexBleMs = millis() + 30000;
+    priorAuthorized = authenticatedNow;
+  }
+#endif
   serviceSurvey();
 #if CALLINGCARD_BLADE_COEXIST
   if ((int32_t)(millis() - nextCoexLogMs) >= 0) {
