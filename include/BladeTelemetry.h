@@ -182,18 +182,27 @@ class BladeTelemetry {
    public:
     volatile bool authenticated = false;
     uint32_t passkey = 0;
-    uint32_t onPassKeyRequest() override { return passkey; }
-    void onPassKeyNotify(uint32_t passkey) override {
-      Serial.printf("BLADE confirm first pairing passkey=%06lu on Blade 2\n",
-                    (unsigned long)passkey);
+    uint32_t onPassKeyRequest() override {
+      Serial.println("BLADE AUTH event=passkey_request");
+      return passkey;
     }
-    bool onSecurityRequest() override { return true; }
+    void onPassKeyNotify(uint32_t passkey) override {
+      Serial.println("BLADE AUTH event=passkey_notify (use locally displayed pairing code)");
+    }
+    bool onSecurityRequest() override {
+      Serial.println("BLADE AUTH event=security_request");
+      return true;
+    }
     // Display-only pairing must never silently approve numeric comparison.
-    bool onConfirmPIN(uint32_t) override { return false; }
+    bool onConfirmPIN(uint32_t) override {
+      Serial.println("BLADE AUTH event=numeric_comparison rejected_by_policy");
+      return false;
+    }
     void onAuthenticationComplete(esp_ble_auth_cmpl_t result) override {
       authenticated = result.success && ((result.auth_mode & ESP_LE_AUTH_REQ_MITM) != 0);
-      Serial.printf("BLADE secure_auth=%u mode=%u\n",
-         authenticated?1:0, (unsigned)result.auth_mode);
+      Serial.printf("BLADE secure_auth=%u success=%u mode=%u fail_reason=%u\n",
+         authenticated?1:0, result.success?1:0,
+         (unsigned)result.auth_mode, (unsigned)result.fail_reason);
     }
   } securityCallbacks_;
   uint32_t pin_ = 0;
