@@ -309,6 +309,12 @@ void addObservation(const callingcard::Observation& observation) {
   callingcard::Observation enriched = observation;
   cap.annotate(enriched);
   pipeline.enqueue(enriched);
+#if CALLINGCARD_BLADE_DETAILS
+  if (enriched.kind == callingcard::Kind::WifiNetwork)
+    blade.queueDetail('W', enriched.channel, enriched.rssiDbm, enriched.label);
+  else if (enriched.kind == callingcard::Kind::BleAdvertisement)
+    blade.queueDetail('B', 0, enriched.rssiDbm, enriched.label);
+#endif
 #if CALLINGCARD_BLADE_ALERTS
   if (enriched.kind == callingcard::Kind::WifiNetwork) blade.queueAlert('W');
   else if (enriched.kind == callingcard::Kind::BleAdvertisement) blade.queueAlert('B');
@@ -655,7 +661,12 @@ void loop() {
   static uint32_t previousLoRaPackets = 0;
   const uint32_t receivedLoRa = cap.packetCount();
   if (receivedLoRa != previousLoRaPackets) {
-    if (receivedLoRa > previousLoRaPackets) blade.queueAlert('L');
+    if (receivedLoRa > previousLoRaPackets) {
+      blade.queueAlert('L');
+#if CALLINGCARD_BLADE_DETAILS
+      blade.queueDetail('L', 0, 0, "RX packet");
+#endif
+    }
     previousLoRaPackets = receivedLoRa;
   }
 #endif
