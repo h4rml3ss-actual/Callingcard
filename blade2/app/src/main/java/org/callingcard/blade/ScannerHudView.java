@@ -13,7 +13,13 @@ import java.util.Iterator;
 public final class ScannerHudView extends View {
     static final class Item {
         final String name; final int channel, rssi; final long timestamp;
-        Item(String n, int c, int r, long t) { name=n;channel=c;rssi=r;timestamp=t; }
+        final ArrayDeque<Integer> history;
+        Item(String n,int c,int r,long t,ArrayDeque<Integer> prior) {
+            name=n;channel=c;rssi=r;timestamp=t;
+            history=prior==null?new ArrayDeque<>():new ArrayDeque<>(prior);
+            if(history.size()>=24)history.removeFirst();
+            history.addLast(r);
+        }
     }
     final ArrayDeque<Item>[] items;
     // Keep raw Wi-Fi sightings for the 120-second channel histogram.
@@ -37,14 +43,20 @@ public final class ScannerHudView extends View {
         int index = source=='W'?0:source=='B'?1:source=='L'?2:-1;
         if(index<0) return;
         long now=android.os.SystemClock.elapsedRealtime();
-        Item updated=new Item(name,channel,rssi,now);
+        ArrayDeque<Item> q=items[index];
+        ArrayDeque<Integer> prior=null;
+        for(Item old:q) {
+            if(index!=2 && name!=null && !name.equals("<unnamed BLE>") &&
+               !name.equals("<hidden>") && old.name.equals(name) &&
+               (index==1 || old.channel==channel)) {prior=old.history;break;}
+        }
+        Item updated=new Item(name,channel,rssi,now,prior);
         if(index==0) {
             while(!wifiSamples.isEmpty() && now-wifiSamples.peekFirst().timestamp>120000)
                 wifiSamples.removeFirst();
             if(wifiSamples.size()>=256) wifiSamples.removeFirst();
             wifiSamples.addLast(updated);
         }
-        ArrayDeque<Item> q=items[index];
         // Same SSID/channel is one displayed Wi-Fi row; same advertised BLE name
         // is one row because our BLE wire payload has no device address.
         // Placeholder/unnamed advertisements are not uniquely identifiable.
@@ -93,6 +105,18 @@ public final class ScannerHudView extends View {
         p.setColor(color);p.setStrokeWidth(1);p.setStyle(Paint.Style.FILL);
         p.setTypeface(android.graphics.Typeface.MONOSPACE);p.setTextSize(size);c.drawText(s,x,y,p);
     }
+    private void drawSignalTrend(Canvas c,Item item,float x,float y,float width,float height,int green,int dim) {
+        p.setColor(dim);p.setStyle(Paint.Style.STROKE);p.setStrokeWidth(1);
+        c.drawRect(x,y,x+width,y+height,p);
+        int count=item.history.size(),i=0;float lastX=0,lastY=0;
+        for(int rssi:item.history) {
+            float px=x+i*width/Math.max(1,count-1);
+            float py=y+height-(Math.max(-110,Math.min(-20,rssi))+110)*height/90f;
+            if(i>0) {p.setColor(green);p.setStrokeWidth(2);c.drawLine(lastX,lastY,px,py,p);}
+            lastX=px;lastY=py;i++;
+        }
+        p.setStyle(Paint.Style.FILL);
+    }
     private int tint() {
         return "LIVE".equals(health)?Color.rgb(95,237,167):
             "STALE".equals(health)?Color.RED:Color.YELLOW;
@@ -116,11 +140,18 @@ public final class ScannerHudView extends View {
             String n=item.name==null?"":item.name;
             for(int pos=0;pos<n.length()&&pos<60;pos+=19)
                 txt(c,n.substring(pos,Math.min(n.length(),pos+19)),28,270+(pos/19)*26,20,white);
-            if(selectedSource==1)txt(c,"CHANNEL "+item.channel,28,355,22,white);
-            if(selectedSource!=3)txt(c,"RSSI "+item.rssi+" dBm",28,385,22,white);
+            if(selectedSource==1)txt(c,"CHANNEL "+item.channel,285,345,17,white);
+            txt(c,"RSSI "+item.rssi+" dBm",28,345,22,white);
+            if(selectedSource==3 && item.name.startsWith("SNR:")) {
+                try {
+                    int t=Integer.parseInt(item.name.substring(4));
+                    txt(c,"SNR "+(t/10.0f)+" dB",28,374,18,white);
+                } catch(NumberFormatException ignored) {}
+            }
+            drawSignalTrend(c,item,28,380,420,44,green,dim);
             long age=Math.max(0,(android.os.SystemClock.elapsedRealtime()-item.timestamp)/1000);
-            txt(c,"LAST SEEN "+age+"s",28,419,18,dim);
-            txt(c,"BACK to scanner",28,451,17,green);
+            txt(c,"SEEN "+age+"s   SAMPLES "+item.history.size(),28,446,15,dim);
+
             c.restore();return;
         }
         if(page==0) {
