@@ -309,6 +309,10 @@ void addObservation(const callingcard::Observation& observation) {
   callingcard::Observation enriched = observation;
   cap.annotate(enriched);
   pipeline.enqueue(enriched);
+#if CALLINGCARD_BLADE_ALERTS
+  if (enriched.kind == callingcard::Kind::WifiNetwork) blade.queueAlert('W');
+  else if (enriched.kind == callingcard::Kind::BleAdvertisement) blade.queueAlert('B');
+#endif
 }
 class AdvertisedCallback : public BLEAdvertisedDeviceCallbacks {
  void onResult(BLEAdvertisedDevice device) override {
@@ -647,6 +651,14 @@ void loop() {
   pipeline.drainTo(Serial, 8, sessionState == SessionState::Recording ? static_cast<Print*>(&sessionFile) : nullptr,
                    sessionStats.hasSession() && (sessionState == SessionState::Recording || sessionState == SessionState::Paused) ? &sessionStats : nullptr);
   serviceStorage();
+#if CALLINGCARD_BLADE_ALERTS
+  static uint32_t previousLoRaPackets = 0;
+  const uint32_t receivedLoRa = cap.packetCount();
+  if (receivedLoRa != previousLoRaPackets) {
+    if (receivedLoRa > previousLoRaPackets) blade.queueAlert('L');
+    previousLoRaPackets = receivedLoRa;
+  }
+#endif
 #if CALLINGCARD_BLADE_POC
   blade.tick(wifiCount, bleCount, cap.packetCount(), cap.gnssFix(),
              sessionState == SessionState::Recording);
