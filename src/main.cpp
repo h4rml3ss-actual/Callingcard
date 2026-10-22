@@ -18,7 +18,12 @@
 
 namespace {
 constexpr uint32_t kPauseMs = 2500;
-constexpr uint32_t kBleScanSeconds = 4;
+constexpr uint32_t kBleScanSeconds =
+#if CALLINGCARD_BLADE_COEXIST
+  2;
+#else
+  4;
+#endif
 constexpr uint32_t kDisplayRefreshMs = 750;
 uint32_t nextDisplayMs = 0;
 constexpr int kMaxLines = 5;
@@ -246,6 +251,12 @@ bool scanWifiNext = true; // Alternate Wi-Fi and BLE scans, starting with Wi-Fi.
 ScanMode scanMode = ScanMode::Idle;
 uint32_t scanStartedMs = 0;
 uint32_t scanTimeouts = 0;
+#if CALLINGCARD_BLADE_COEXIST
+uint32_t coexSkips = 0;
+uint32_t coexScans = 0;
+uint32_t nextCoexBleMs = 0;
+uint32_t nextCoexLogMs = 0;
+#endif
 uint32_t bleOverflow = 0;
 BLEScan* bleScanner = nullptr;
 callingcard::Observation latest[kMaxLines]{};
@@ -505,6 +516,20 @@ void beginSurvey() {
     nextScanMs = millis() + kPauseMs;
     return;
 #endif
+#if CALLINGCARD_BLADE_COEXIST
+    // A connected-first test: do not interrupt advertising while searching for Blade.
+    // After connection, allow brief, infrequent survey windows.
+    if (!blade.connected() || (int32_t)(millis() - nextCoexBleMs) < 0) {
+      ++coexSkips;
+      scanWifiNext = true;
+      nextScanMs = millis() + kPauseMs;
+      return;
+    }
+    nextCoexBleMs = millis() + 30000;
+    ++coexScans;
+    Serial.printf("BLADE COEX scan_start=%lu skips=%lu connected=%u\n",
+       (unsigned long)coexScans, (unsigned long)coexSkips, blade.connected()?1:0);
+#endif
     portENTER_CRITICAL(&bleMux);
     bleDone = false;
     bleHead = bleTail = bleSampleCount = 0;
@@ -651,6 +676,14 @@ void loop() {
     nextCapLogMs = millis() + 10000;
   }
   serviceSurvey();
+#if CALLINGCARD_BLADE_COEXIST
+  if ((int32_t)(millis() - nextCoexLogMs) >= 0) {
+    Serial.printf("BLADE COEX connected=%u ble_scans=%lu skipped=%lu dropped=%lu prequeue=%lu\n",
+      blade.connected()?1:0,(unsigned long)coexScans,(unsigned long)coexSkips,
+      (unsigned long)pipeline.dropped(),(unsigned long)blePrequeueDropped);
+    nextCoexLogMs = millis() + 10000;
+  }
+#endif
   if (scanMode == ScanMode::Idle &&
       static_cast<int32_t>(millis() - nextScanMs) >= 0) beginSurvey();
   delay(10);
