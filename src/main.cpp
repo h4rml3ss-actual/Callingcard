@@ -15,6 +15,9 @@
 #include "HistoryDetails.h"
 #include "RfActivity.h"
 #include "BladeTelemetry.h"
+#if CALLINGCARD_CSTP_APP_SECURE
+#include "CstpSecureServer.h"
+#endif
 
 namespace {
 constexpr uint32_t kPauseMs = 2500;
@@ -41,6 +44,9 @@ callingcard::CapSensors cap;
 callingcard::EventPipeline pipeline;
 #if CALLINGCARD_BLADE_POC
 callingcard::BladeTelemetry blade;
+#endif
+#if CALLINGCARD_CSTP_APP_SECURE
+callingcard::CstpSecureServer cstp;
 #endif
 callingcard::RfActivity activity;
 bool activityVisible = false;
@@ -671,6 +677,11 @@ void setup() {
   WiFi.mode(WIFI_STA);
   WiFi.disconnect();
   BLEDevice::init("Callingcard");
+#if CALLINGCARD_CSTP_APP_SECURE
+  // No legacy Blade telemetry service in this build.
+  BLEDevice::setMTU(100);
+  cstp.begin();
+#endif
 #if CALLINGCARD_BLADE_GATT_ONLY
   Serial.println("BLADE mode=GATT_ONLY ble_survey_disabled=1");
 #endif
@@ -719,6 +730,10 @@ void loop() {
 #if CALLINGCARD_BLADE_POC
   blade.tick(wifiCount, bleCount, cap.packetCount(), cap.gnssFix(),
              sessionState == SessionState::Recording);
+#endif
+#if CALLINGCARD_CSTP_APP_SECURE
+  cstp.tick(wifiCount, bleCount, cap.packetCount(), cap.gnssFix(),
+            sessionState == SessionState::Recording);
 #endif
   if (historyVisible && sdMounted && !detailVisible) history.tick(sessionFile ? sessionPath : nullptr);
   if (detailVisible) details.tick();
