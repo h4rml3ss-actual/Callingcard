@@ -45,6 +45,10 @@ public class MainActivity extends Activity {
     private boolean bonding = false;
     private boolean bondFailed = false; // No repeated PIN prompts after a failed enrollment.
     private boolean bondingRegistered = false;
+    // All connection state lives on the main looper. A non-null GATT is the
+    // single owner, including while connectGatt() is still connecting.
+    private long connectionAttempt = 0;
+    private boolean discoveryStarted = false;
     private final BroadcastReceiver bondReceiver = new BroadcastReceiver() {
         @Override public void onReceive(Context context, Intent intent) {
             if (!BluetoothDevice.ACTION_BOND_STATE_CHANGED.equals(intent.getAction())) return;
@@ -56,7 +60,7 @@ public class MainActivity extends Activity {
                 bonding=false;
                 bondFailed=false;
                 if(linkConnected && gatt!=null) beginServiceDiscovery(gatt);
-                else if (gatt==null) connectPaired(device);
+                // A bond broadcast must never create another GATT client.
             } else if(state==BluetoothDevice.BOND_NONE) {
                 bonding=false;pendingBond=null;
                 bondFailed=true;
@@ -78,6 +82,10 @@ public class MainActivity extends Activity {
     };
     private final ScanCallback discovery = new ScanCallback() {
         @Override public void onScanResult(int callbackType, ScanResult result) {
+            handler.post(() -> processScanResult(result));
+        }
+        private void processScanResult(ScanResult result) {
+            if (!active || gatt != null || bonding || bondFailed || !scanning) return;
             BluetoothDevice device = result.getDevice();
             ScanRecord scanRecord = result.getScanRecord();
             String name = scanRecord == null ? null : scanRecord.getDeviceName();
@@ -102,33 +110,7 @@ public class MainActivity extends Activity {
     };
     private final BluetoothGattCallback callback = new BluetoothGattCallback() {
         @Override public void onConnectionStateChange(BluetoothGatt client, int status, int state) {
-            Log.i(TAG, "connection state="+state+" status="+status+" bond="+client.getDevice().getBondState());
-            if (state == BluetoothProfile.STATE_CONNECTED && status == BluetoothGatt.GATT_SUCCESS) {
-                if (!canConnect()) return;
-                final int bond = client.getDevice().getBondState();
-                if (bond == BluetoothDevice.BOND_BONDED) {
-                    Log.i(TAG, "SMP already_bonded=1; beginning discovery");
-                    beginServiceDiscovery(client);
-                } else if (bond == BluetoothDevice.BOND_BONDING) {
-                    bonding = true;
-                    Log.i(TAG, "SMP bonding_in_progress=1");
-                } else if (!bonding && !bondFailed) {
-                    bonding = true;
-                    pendingBond = client.getDevice();
-                    Log.i(TAG, "SMP bond_request=1");
-                    show("PAIR ONCE: enter Cardputer PIN");
-                    if (!pendingBond.createBond()) {
-                        bonding=false; bondFailed=true;
-                        show("PAIRING COULD NOT START - restart app");
-                    }
-                }
-            } else if (state == BluetoothProfile.STATE_DISCONNECTED) {
-                Log.w(TAG, "BLE disconnected, gattStatus="+status);
-                handler.post(() -> { lastTelemetryMs=-1; latestHud=""; lastAlert=""; lastAlertSequence=-1; show("CALLINGCARD LINK DISCONNECTED"); });
-                client.close();
-                if (gatt == client) gatt = null;
-                handler.postDelayed(() -> { if(active && !bondFailed) startScan(); }, 2000);
-            }
+            handler.post(() -> handleConnectionState(client, status, state));
         }
         @Override public void onMtuChanged(BluetoothGatt client, int mtu, int status) {
             Log.i(TAG, "negotiated MTU=" + mtu + " status=" + status);
@@ -224,18 +206,83 @@ public class MainActivity extends Activity {
             if (scanning) { stopScan(); show("No Callingcard found\nRetrying..."); handler.postDelayed(this::startScan, 1500); }
         }, 12000);
     }
+    // Main-thread only: reject callbacks from a superseded GATT instance.
+    private void handleConnectionState(BluetoothGatt client, int status, int state) {
+        if (client != gatt || !active) {
+            Log.w(TAG, "GATT stale_callback=1 state=" + state + " status=" + status);
+            client.close();
+            return;
+        }
+        Log.i(TAG, "GATT attempt=" + connectionAttempt + " state=" + state +
+                   " status=" + status + " bond=" + client.getDevice().getBondState());
+        if (state == BluetoothProfile.STATE_CONNECTED && status == BluetoothGatt.GATT_SUCCESS) {
+            linkConnected = true;
+            if (!canConnect()) return;
+            final int bond = client.getDevice().getBondState();
+            if (bond == BluetoothDevice.BOND_BONDED) {
+                bonding = false;
+                beginServiceDiscovery(client);
+            } else if (bond == BluetoothDevice.BOND_BONDING) {
+                bonding = true;
+                Log.i(TAG, "SMP bonding_in_progress=1");
+            } else if (!bonding && !bondFailed) {
+                bonding = true;
+                pendingBond = client.getDevice();
+                Log.i(TAG, "SMP bond_request=1 attempt=" + connectionAttempt);
+                show("PAIR ONCE: enter Cardputer PIN");
+                if (!pendingBond.createBond()) {
+                    bonding = false;
+                    bondFailed = true;
+                    show("PAIRING COULD NOT START - restart app");
+                }
+            }
+        } else if (state == BluetoothProfile.STATE_DISCONNECTED || status != BluetoothGatt.GATT_SUCCESS) {
+            Log.w(TAG, "GATT disconnected attempt=" + connectionAttempt + " status=" + status);
+            linkConnected = false;
+            discoveryStarted = false;
+            lastTelemetryMs = -1;
+            latestHud = "";
+            lastAlert = "";
+            lastAlertSequence = -1;
+            show("CALLINGCARD LINK DISCONNECTED");
+            gatt = null;
+            client.close();
+            pendingBond = null;
+            bonding = false;
+            if (!bondFailed) handler.postDelayed(() -> {
+                if (active && gatt == null) startScan();
+            }, 2000);
+        }
+    }
     private void beginServiceDiscovery(BluetoothGatt client) {
-        if (!active || !canConnect() || client==null) return;
-        Log.i(TAG, "SMP authenticated_bond=1; starting GATT discovery");
+        if (!active || !canConnect() || client==null || client != gatt ||
+            !linkConnected || discoveryStarted ||
+            client.getDevice().getBondState() != BluetoothDevice.BOND_BONDED) return;
+        discoveryStarted = true;
+        Log.i(TAG, "SMP authenticated_bond=1; starting GATT discovery attempt=" + connectionAttempt);
         if (!client.requestMtu(100)) client.discoverServices();
     }
     private void connectPaired(BluetoothDevice device) {
-        if(!active || !canConnect())return;
-        if(gatt!=null) {gatt.close();gatt=null;}
-        linkConnected=false;
+        if (!active || !canConnect() || device == null || gatt != null ||
+            bonding || bondFailed) {
+            Log.i(TAG, "GATT duplicate_connect_ignored=1");
+            return;
+        }
+        stopScan();
+        linkConnected = false;
+        discoveryStarted = false;
         show("CONNECTING BLE LINK...");
-        pendingBond=device;
-        gatt=device.connectGatt(this,false,callback,BluetoothDevice.TRANSPORT_LE);
+        pendingBond = device;
+        final long attempt = ++connectionAttempt;
+        Log.i(TAG, "GATT connect_attempt=" + attempt);
+        // Keep the single returned client until its disconnect callback or
+        // Activity teardown. No bond broadcast may replace it.
+        gatt = device.connectGatt(this, false, callback, BluetoothDevice.TRANSPORT_LE);
+        if (gatt == null) {
+            Log.e(TAG, "GATT connectGatt_returned_null attempt=" + attempt);
+            pendingBond = null;
+            if (active) handler.postDelayed(this::startScan, 2000);
+        }
     }
     private void stopScan() {
         if (scanning && scanner != null && canScan()) scanner.stopScan(discovery);
