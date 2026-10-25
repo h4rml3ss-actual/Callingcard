@@ -114,11 +114,11 @@ public class MainActivity extends Activity {
         }
         @Override public void onMtuChanged(BluetoothGatt client, int mtu, int status) {
             Log.i(TAG, "negotiated MTU=" + mtu + " status=" + status);
-            if (canConnect()) client.discoverServices();
+            if (client == gatt && linkConnected && canConnect()) client.discoverServices();
         }
         @Override public void onServicesDiscovered(BluetoothGatt client, int status) {
             Log.i(TAG, "services discovered status=" + status);
-            if (status != BluetoothGatt.GATT_SUCCESS || !canConnect()) return;
+            if (client != gatt || !linkConnected || status != BluetoothGatt.GATT_SUCCESS || !canConnect()) return;
             BluetoothGattService service = client.getService(SERVICE);
             BluetoothGattCharacteristic ch = service == null ? null : service.getCharacteristic(STATUS);
             if (ch == null) { show("Telemetry service missing"); return; }
@@ -131,6 +131,7 @@ public class MainActivity extends Activity {
             // CCCD writes are asynchronous; alert subscription follows status descriptor callback.
         }
         @Override public void onDescriptorWrite(BluetoothGatt client, BluetoothGattDescriptor descriptor, int status) {
+            if (client != gatt || !linkConnected) return;
             if (status != BluetoothGatt.GATT_SUCCESS) { Log.w(TAG, "notification descriptor write failed " + status); return; }
             if (STATUS.equals(descriptor.getCharacteristic().getUuid()) && canConnect()) {
                 BluetoothGattService service = client.getService(SERVICE);
@@ -147,9 +148,10 @@ public class MainActivity extends Activity {
             }
         }
         @Override public void onCharacteristicRead(BluetoothGatt client, BluetoothGattCharacteristic ch, int status) {
-            if (status == BluetoothGatt.GATT_SUCCESS && STATUS.equals(ch.getUuid())) showPayload(ch.getValue());
+            if (client == gatt && linkConnected && status == BluetoothGatt.GATT_SUCCESS && STATUS.equals(ch.getUuid())) showPayload(ch.getValue());
         }
         @Override public void onCharacteristicChanged(BluetoothGatt client, BluetoothGattCharacteristic ch) {
+            if (client != gatt || !linkConnected) return;
             if (STATUS.equals(ch.getUuid())) showPayload(ch.getValue());
             else if (ALERT.equals(ch.getUuid())) showAlert(ch.getValue());
             else if (DETAIL.equals(ch.getUuid())) showDetail(ch.getValue());
@@ -357,7 +359,7 @@ public class MainActivity extends Activity {
                              age < 10000 ? Color.YELLOW : Color.RED);
     }
     private void subscribeDetails(BluetoothGatt client) {
-        if (!canConnect()) return;
+        if (!canConnect() || client != gatt || !linkConnected) return;
         BluetoothGattService service=client.getService(SERVICE);
         BluetoothGattCharacteristic ch=service==null?null:service.getCharacteristic(DETAIL);
         if(ch==null) { Log.i(TAG,"legacy firmware: detail characteristic absent"); return; }
