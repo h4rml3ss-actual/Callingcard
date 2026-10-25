@@ -30,7 +30,7 @@ class CstpSecureServer {
     server_->setCallbacks(&callbacks_);
     callbacks_.owner = this;
     BLEService* svc = server_->createService(kService);
-    control_ = svc->createCharacteristic(kControl, BLECharacteristic::PROPERTY_WRITE |
+    control_ = svc->createCharacteristic(kControl, BLECharacteristic::PROPERTY_WRITE | BLECharacteristic::PROPERTY_READ |
                                                  BLECharacteristic::PROPERTY_NOTIFY);
     data_ = svc->createCharacteristic(kData, BLECharacteristic::PROPERTY_NOTIFY);
     control_->setCallbacks(&controlCallbacks_);
@@ -218,7 +218,9 @@ class CstpSecureServer {
           if (a<0 || b<0) { valid=false; break; }
           candidate[i]=(a<<4)|b;
         }
-        if (valid) {
+        uint8_t any = 0;
+        for (uint8_t x : candidate) any |= x;
+        if (valid && any != 0) {
           Preferences prefs;
           if (prefs.begin("cstp",false)) {
             provisioned_ = prefs.putBytes("psk",candidate,32)==32;
