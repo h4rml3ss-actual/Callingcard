@@ -9,6 +9,7 @@
 #include <SD.h>
 #include "Observation.h"
 #include "WifiSignatures.h"
+#include "BleSignatures.h"
 #include "CapSensors.h"
 #include "EventPipeline.h"
 #include "SessionStats.h"
@@ -300,6 +301,16 @@ void drainBleSamples(uint8_t maximum = 8) {
     portEXIT_CRITICAL(&bleMux);
     if (!hasSample) return;
     if (latestCount < kMaxLines) latest[latestCount++] = snapshot;
+    const auto candidate=callingcard::classifyBle(snapshot.label,
+      snapshot.bleHasCompanyId,snapshot.bleCompanyId,snapshot.bleServiceUuid);
+    if(candidate.detection.valid) {
+      // Low-confidence name heuristic only. No raw advertisement bytes, addresses,
+      // exact device IDs or GPS coordinates in the unencrypted HUD stream.
+      Serial.printf("DETECT candidate=%s confidence=%s rule=%s rssi=%d source=ble\\n",
+        callingcard::detectionTypeName(candidate.detection.type),
+        callingcard::confidenceName(candidate.detection.confidence),
+        candidate.ruleId,snapshot.rssiDbm);
+    }
     pipeline.enqueue(snapshot); // Already tagged at callback time, never re-annotate.
 #if CALLINGCARD_BLADE_DETAILS
     // BLE callbacks use the fixed prequeue; forward from main loop so the HUD sees them.
@@ -351,6 +362,19 @@ class AdvertisedCallback : public BLEAdvertisedDeviceCallbacks {
    const std::string name = device.getName();
    snprintf(item.label, sizeof(item.label), "%s",
             name.empty() ? "<unnamed BLE>" : name.c_str());
+   if (device.haveManufacturerData()) {
+     const std::string data=device.getManufacturerData();
+     if (data.size()>=2) {
+       item.bleHasCompanyId=true;
+       item.bleCompanyId=static_cast<uint16_t>(
+         static_cast<uint8_t>(data[0]) |
+         (static_cast<uint16_t>(static_cast<uint8_t>(data[1]))<<8));
+     }
+   }
+   if (device.haveServiceUUID()) {
+     const std::string uuid=device.getServiceUUID().toString();
+     snprintf(item.bleServiceUuid,sizeof(item.bleServiceUuid),"%s",uuid.c_str());
+   }
    portENTER_CRITICAL(&bleMux);
    ++bleCallbacks;
    // The main loop publishes a recent GNSS snapshot. Do not query TinyGPS
