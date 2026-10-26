@@ -106,7 +106,7 @@ public final class ScannerHudView extends View {
             selectedItem=updated;
         invalidate();
     }
-    void next(int delta) { if(detailOpen)return; page=(page+delta+5)%5; selection=0;selectedKey=null;invalidate(); }
+    void next(int delta) { if(detailOpen||detectionDetail)return; page=(page+delta+5)%5; detectionSelection=0; selection=0;selectedKey=null;invalidate(); }
     boolean toggleOld() {
         if(page==0||page==4||detailOpen)return false;
         showOld=!showOld;
