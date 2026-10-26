@@ -15,7 +15,9 @@ class DetectionCooldown {
     const unsigned slot=hash%8;
     if(entries_[slot].set && entries_[slot].key==hash &&
        uint32_t(nowMs-entries_[slot].lastMs)<30000UL)return false;
-    entries_[slot]={hash,nowMs,true};
+    entries_[slot].key = hash;
+    entries_[slot].lastMs = nowMs;
+    entries_[slot].set = true;
     return true;
   }
  private:
