@@ -29,13 +29,13 @@ class ObservationCorrelator {
     }
     Entry* match=nullptr;
     Entry* freeSlot=nullptr;
-    Entry* oldest=&entries_[0];
+    Entry* oldest=nullptr;
     for(unsigned i=0;i<Capacity;++i) {
       Entry& e=entries_[i];
       if(!e.valid){if(!freeSlot)freeSlot=&e;continue;}
       // Millis wrap-safe comparison for bounded session time spans.
-      if(static_cast<int32_t>(e.last-o.uptimeMs)>static_cast<int32_t>(oldest->last-o.uptimeMs))
-        oldest=&e;
+      if(!oldest || static_cast<uint32_t>(o.uptimeMs-e.last) >
+           static_cast<uint32_t>(o.uptimeMs-oldest->last))oldest=&e;
       if(e.kind==o.kind && e.typeEquals(o.detectionType) &&
          equalsIgnoreCase(e.address,addr)){match=&e;break;}
     }
