@@ -36,4 +36,25 @@ int main() {
   assert(!classifyBle("unknown",true,0x004c,"FEAA").detection.valid);
   assert(!classifyBle("unknown",true,0x01ab,nullptr).detection.valid);
 
+  Observation multi{};
+  multi.kind=Kind::BleAdvertisement;
+  multi.bleServiceCount=3;
+  strcpy(multi.bleServices[0],"180F");
+  strcpy(multi.bleServices[1],"FEAA");
+  strcpy(multi.bleServices[2],"FD5A");
+  auto later=classifyBleObservation(multi);
+  assert(later.detection.valid && later.detection.type==DetectionType::Tracker);
+  assert(later.detection.confidence==Confidence::Medium);
+  multi.bleServiceCount=2;
+  assert(!classifyBleObservation(multi).detection.valid);
+  strcpy(multi.label,"Tile Pro");
+  auto fallback=classifyBleObservation(multi);
+  assert(fallback.detection.valid && fallback.detection.confidence==Confidence::Low);
+  multi.bleHasCompanyId=true;
+  multi.bleCompanyId=0x004c;
+  strcpy(multi.label,"unknown");
+  assert(!classifyBleObservation(multi).detection.valid);
+  multi.bleServiceCount=4;
+  strcpy(multi.bleServices[3],"fd5f");
+  assert(classifyBleObservation(multi).detection.type==DetectionType::Meta);
 }

@@ -16,7 +16,12 @@ struct Observation {
   char bleAddress[18] = {}; // BLE advertiser address may be randomized/rotate.
   bool bleHasCompanyId = false;
   uint16_t bleCompanyId = 0; // Advertising company identifier (not device identity).
-  char bleServiceUuid[37] = {}; // First advertised service UUID, if any.
+  char bleServiceUuid[37] = {}; // Legacy first-service compatibility.
+  uint8_t bleServiceCount = 0;
+  char bleServices[4][37] = {}; // At most 4 UUIDs, bounded callback snapshot.
+  uint8_t bleManufacturerLength = 0;
+  uint8_t bleManufacturer[16] = {}; // Includes company ID bytes, no heap ownership.
+  bool bleAdvertisementTruncated = false;
   // Snapshot at observation creation; never retroactively enrich queued events.
   // Classified candidate captured at observation time, not inferred later.
   bool hasDetection = false;
