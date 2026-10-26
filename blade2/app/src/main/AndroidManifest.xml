@@ -9,5 +9,11 @@
         <activity android:name=".MainActivity" android:exported="true">
             <intent-filter><action android:name="android.intent.action.MAIN"/><category android:name="android.intent.category.LAUNCHER"/></intent-filter>
         </activity>
+        <!-- Lab-only CSTP client; separate launcher, never falls back to legacy GATT. -->
+        <activity android:name=".CstpActivity" android:exported="true"
+                  android:label="Callingcard CSTP (Lab)">
+            <intent-filter><action android:name="android.intent.action.MAIN"/>
+                <category android:name="android.intent.category.LAUNCHER"/></intent-filter>
+        </activity>
     </application>
 </manifest>
