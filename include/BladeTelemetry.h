@@ -3,6 +3,9 @@
 #include "DetectionEngine.h"
 #if CALLINGCARD_BLADE_GEO_V2
 #include "GeoFrames.h"
+#if CALLINGCARD_BLADE_EVIDENCE_V3
+#include "EvidenceFrames.h"
+#endif
 #endif
 #if CALLINGCARD_BLADE_POC
 #include <BLEDevice.h>
@@ -44,6 +47,11 @@ class BladeTelemetry {
     GeoFrames next{};
     const uint16_t seq=static_cast<uint16_t>((geoSequence_+1)%1000);
     if(!formatGeoFrames(observation,seq,next))return false;
+#if CALLINGCARD_BLADE_EVIDENCE_V3
+    EvidenceFrames evidence{};
+    if(!formatEvidenceFrames(observation,seq,evidence))return false;
+    evidenceFrames_=evidence;
+#endif
     geoSequence_=seq;
     geoFrames_=next;
     geoActive_=true;
@@ -176,13 +184,21 @@ class BladeTelemetry {
       if(geoPhase_==0)frame=geoFrames_.header;
       else if(geoPhase_==1 && geoFrames_.hasPosition)frame=geoFrames_.position;
       else if(geoPhase_==2 && geoFrames_.hasTimestamp)frame=geoFrames_.timestamp;
+#if CALLINGCARD_BLADE_EVIDENCE_V3
+      else if(geoPhase_>=3 && geoPhase_<static_cast<uint8_t>(3+evidenceFrames_.count))
+        frame=evidenceFrames_.fragments[geoPhase_-3];
+#endif
       if(frame) {
         alert_->setValue(frame);
         alert_->notify();
         Serial.printf("BLADE geo=%s\\n",frame);
       }
       ++geoPhase_;
-      if(geoPhase_>=3){geoActive_=false;geoPhase_=0;}
+      uint8_t phases=3;
+#if CALLINGCARD_BLADE_EVIDENCE_V3
+      phases=static_cast<uint8_t>(3+evidenceFrames_.count);
+#endif
+      if(geoPhase_>=phases){geoActive_=false;geoPhase_=0;}
     }
 #endif
     if (callbacks_.connected &&
@@ -291,6 +307,9 @@ class BladeTelemetry {
 #endif
 #if CALLINGCARD_BLADE_GEO_V2
   GeoFrames geoFrames_{};
+#if CALLINGCARD_BLADE_EVIDENCE_V3
+  EvidenceFrames evidenceFrames_{};
+#endif
   bool geoActive_=false;
   uint8_t geoPhase_=0;
   uint16_t geoSequence_=0;

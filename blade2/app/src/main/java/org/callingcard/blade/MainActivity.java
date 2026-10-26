@@ -39,6 +39,46 @@ public class MainActivity extends Activity {
     private int lastAlertSequence = -1;
     private int lastGeoSequence = -1;
     private String lastGeoSummary = "";
+    private long geoHeaderAtMs = -1;
+    private final String[][] evidenceChunks = new String[2][9];
+    private final int[] evidenceTotals = new int[2];
+    private void resetEvidence() {
+        for(String[] parts:evidenceChunks) java.util.Arrays.fill(parts,null);
+        evidenceTotals[0]=evidenceTotals[1]=0;
+    }
+    private void receiveEvidence(String[] parts) {
+        if(parts.length!=6 || lastGeoSequence<0 || geoHeaderAtMs<0 ||
+           SystemClock.elapsedRealtime()-geoHeaderAtMs>20000)return;
+        try {
+            int seq=Integer.parseInt(parts[1]);
+            int index=Integer.parseInt(parts[3]);
+            int total=Integer.parseInt(parts[4]);
+            int field="I".equals(parts[2])?0:"R".equals(parts[2])?1:-1;
+            String data=parts[5];
+            if(seq!=lastGeoSequence||field<0||total<1||total>9||
+               index<0||index>=total||data.length()<1||data.length()>8||
+               !data.matches("[A-Za-z0-9:_\\\\.-]+"))return;
+            if(evidenceTotals[field]!=0 && evidenceTotals[field]!=total)return;
+            evidenceTotals[field]=total;
+            evidenceChunks[field][index]=data;
+            StringBuilder combined=new StringBuilder();
+            for(int i=0;i<total;i++) {
+                if(evidenceChunks[field][i]==null)return;
+                combined.append(evidenceChunks[field][i]);
+            }
+            String evidence=combined.toString();
+            if(field==0 && !evidence.matches("(?i)[0-9a-f]{2}(:[0-9a-f]{2}){5}"))
+                return;
+            Log.i(TAG,"evidence seq="+seq+" field="+parts[2]+" value="+evidence);
+            // Retain the bounded completed field for current candidate HUD.
+            lastAlert=lastGeoSummary+" / "+(field==0?"ID ":"RULE ")+evidence;
+            graphical.alert=lastAlert;
+            lastAlertMs=SystemClock.elapsedRealtime();
+            renderHud();
+            evidenceTotals[field]=0;
+            java.util.Arrays.fill(evidenceChunks[field],null);
+        } catch(NumberFormatException ignored) {}
+    }
     private static final String[] GEO_TYPES =
         {"FLOCK","ALPR","AXON","CAMERA","TRACKER","META","SKIMMER"};
     private final Handler handler = new Handler(Looper.getMainLooper());
@@ -380,6 +420,10 @@ public class MainActivity extends Activity {
             // Opt-in v2 stream: H=classified header, P=scaled GPS, T=GNSS UTC.
             // Sequence numbers prevent late geographic fragments attaching
             // to a different detection alert.
+            if(parts.length==6 && parts[0].equals("X")) {
+                receiveEvidence(parts);
+                return;
+            }
             if(parts.length==6 && parts[0].equals("H")) {
                 try {
                     int seq=Integer.parseInt(parts[1]);
@@ -390,6 +434,8 @@ public class MainActivity extends Activity {
                        !Arrays.asList("L","M","H").contains(parts[3])||
                        !Arrays.asList("W","B").contains(parts[5]))return;
                     lastGeoSequence=seq;
+                    geoHeaderAtMs=SystemClock.elapsedRealtime();
+                    resetEvidence();
                     String confidence=parts[3].equals("L")?"LOW":parts[3].equals("M")?"MEDIUM":"HIGH";
                     String source=parts[5].equals("W")?"Wi-Fi":"BLE";
                     lastGeoSummary="POSSIBLE "+GEO_TYPES[kind]+" / "+confidence+
