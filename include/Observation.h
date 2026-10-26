@@ -17,6 +17,11 @@ struct Observation {
   uint16_t bleCompanyId = 0; // Advertising company identifier (not device identity).
   char bleServiceUuid[37] = {}; // First advertised service UUID, if any.
   // Snapshot at observation creation; never retroactively enrich queued events.
+  // Classified candidate captured at observation time, not inferred later.
+  bool hasDetection = false;
+  char detectionType[12] = {};
+  char detectionConfidence[8] = {};
+  char detectionRule[48] = {};
   bool hasUtc = false;
   char utc[25] = {}; // UTC ISO8601 second precision, Z suffix.
   bool hasPosition = false;
