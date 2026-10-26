@@ -8,6 +8,9 @@ import android.view.View;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Iterator;
+import android.content.SharedPreferences;
+import org.json.JSONArray;
+import org.json.JSONObject;
 
 /** Square-display graphical HUD. Only passive observations from the Cardputer. */
 public final class ScannerHudView extends View {
@@ -21,23 +24,94 @@ public final class ScannerHudView extends View {
             history.addLast(r);
         }
     }
+    // Alerts contain no device identifier. Grouping by category/source can
+    // combine unrelated transmitters and must NOT imply device identity.
     static final class DetectionItem {
-        final String type, confidence, source;
-        final int rssi;
-        final long timestamp;
+        final String type, source;
+        String confidence;
+        int lastRssi, strongestRssi, sightings;
+        long firstSeen, lastSeen;
         DetectionItem(String t,String c,int r,String src,long when) {
-            type=t;confidence=c;rssi=r;source=src;timestamp=when;
+            type=t;confidence=c;source=src;
+            lastRssi=r;strongestRssi=r;sightings=1;
+            firstSeen=lastSeen=when;
         }
     }
+    private static final String HISTORY_PREF="detection_history_v1";
+    private static final String HISTORY_KEY="entries";
+    private static final long GROUP_WINDOW_MS=120000L;
+    private static final long RETENTION_MS=24L*60*60*1000;
+    private final SharedPreferences detectionPrefs;
     private final ArrayDeque<DetectionItem> detections=new ArrayDeque<>();
     private int detectionSelection=0;
     private boolean detectionDetail=false;
+    private static int confidenceRank(String s) {
+        return "HIGH".equals(s)?3:"MEDIUM".equals(s)?2:1;
+    }
+    private void saveDetections() {
+        JSONArray array=new JSONArray();
+        for(DetectionItem d:detections) {
+            JSONObject item=new JSONObject();
+            try {
+                item.put("type",d.type); item.put("source",d.source);
+                item.put("confidence",d.confidence);
+                item.put("lastRssi",d.lastRssi); item.put("strongestRssi",d.strongestRssi);
+                item.put("sightings",d.sightings);
+                item.put("first",d.firstSeen); item.put("last",d.lastSeen);
+                array.put(item);
+            } catch(org.json.JSONException ignored) {}
+        }
+        detectionPrefs.edit().putString(HISTORY_KEY,array.toString()).apply();
+    }
+    private void loadDetections() {
+        long now=System.currentTimeMillis();
+        try {
+            JSONArray array=new JSONArray(detectionPrefs.getString(HISTORY_KEY,"[]"));
+            for(int i=0;i<array.length() && detections.size()<24;++i) {
+                JSONObject obj=array.getJSONObject(i);
+                String type=obj.getString("type"),source=obj.getString("source");
+                String confidence=obj.getString("confidence");
+                long first=obj.getLong("first"),last=obj.getLong("last");
+                if(!java.util.Arrays.asList("FLOCK","ALPR","AXON","CAMERA","TRACKER","META","SKIMMER").contains(type)
+                    || !java.util.Arrays.asList("Wi-Fi","BLE").contains(source)
+                    || !java.util.Arrays.asList("LOW","MEDIUM","HIGH").contains(confidence)
+                    || first>last || last>now || now-last>RETENTION_MS)continue;
+                int rssi=obj.getInt("lastRssi"),strongest=obj.getInt("strongestRssi");
+                if(rssi< -127||rssi>20||strongest< -127||strongest>20)continue;
+                DetectionItem d=new DetectionItem(type,confidence,rssi,source,first);
+                d.lastSeen=last;d.strongestRssi=strongest;
+                d.sightings=Math.max(1,Math.min(9999,obj.getInt("sightings")));
+                detections.addLast(d);
+            }
+        } catch(org.json.JSONException ignored) {
+            detections.clear();
+        }
+    }
     void addDetection(String type,String confidence,int rssi,String source) {
-        long now=android.os.SystemClock.elapsedRealtime();
-        // Bounded transient on-device history, newest first; no addresses or GPS.
-        if(detections.size()>=24)detections.removeLast();
-        detections.addFirst(new DetectionItem(type,confidence,rssi,source,now));
+        long now=System.currentTimeMillis();
+        Iterator<DetectionItem> prune=detections.iterator();
+        while(prune.hasNext())if(now-prune.next().lastSeen>RETENTION_MS)prune.remove();
+        DetectionItem match=null;
+        for(DetectionItem d:detections) {
+            if(d.type.equals(type) && d.source.equals(source) &&
+                now>=d.lastSeen && now-d.lastSeen<=GROUP_WINDOW_MS) {
+                match=d;break;
+            }
+        }
+        if(match!=null) {
+            detections.remove(match);
+            match.lastSeen=now;match.lastRssi=rssi;
+            match.strongestRssi=Math.max(match.strongestRssi,rssi);
+            match.sightings=Math.min(9999,match.sightings+1);
+            if(confidenceRank(confidence)>confidenceRank(match.confidence))
+                match.confidence=confidence;
+            detections.addFirst(match);
+        } else {
+            if(detections.size()>=24)detections.removeLast();
+            detections.addFirst(new DetectionItem(type,confidence,rssi,source,now));
+        }
         detectionSelection=0;
+        saveDetections();
         invalidate();
     }
     final ArrayDeque<Item>[] items;
@@ -60,6 +134,8 @@ public final class ScannerHudView extends View {
     @SuppressWarnings("unchecked")
     ScannerHudView(Context context) {
         super(context);
+        detectionPrefs=context.getSharedPreferences(HISTORY_PREF,Context.MODE_PRIVATE);
+        loadDetections();
         items = (ArrayDeque<Item>[])new ArrayDeque<?>[3];
         for (int i=0;i<3;i++) items[i]=new ArrayDeque<>();
         setBackgroundColor(Color.BLACK);
@@ -198,11 +274,12 @@ public final class ScannerHudView extends View {
                     if(idx==detectionSelection && detectionDetail) {
                         txt(c,"POSSIBLE "+d.type,28,204,25,Color.YELLOW);
                         txt(c,"CONFIDENCE "+d.confidence,28,251,20,white);
-                        txt(c,"SIGNAL "+d.rssi+" dBm",28,298,20,green);
+                        txt(c,"SIGNAL "+d.lastRssi+" dBm",28,298,20,green);
                         txt(c,"SOURCE "+d.source,28,341,20,white);
-                        long age=(android.os.SystemClock.elapsedRealtime()-d.timestamp)/1000;
-                        txt(c,"SEEN "+age+"s ago",28,384,19,dim);
-                        txt(c,"Candidate, not identity proof",28,434,15,Color.YELLOW);
+                        long age=(System.currentTimeMillis()-d.lastSeen)/1000;
+                        txt(c,"LAST SEEN "+Math.max(0,age)+"s ago",28,383,17,dim);
+                        txt(c,"SIGHTINGS "+d.sightings+"  PEAK "+d.strongestRssi+"dBm",28,407,15,white);
+                        txt(c,"Grouped alerts, not device IDs",28,438,15,Color.YELLOW);
                         break;
                     }
                     ++idx;
@@ -217,7 +294,7 @@ public final class ScannerHudView extends View {
                             }
                             String name="POSSIBLE "+d.type;
                             txt(c,name,28,y,19,Color.YELLOW);
-                            txt(c,d.confidence+"  "+d.rssi+"dBm",28,y+19,14,dim);
+                            txt(c,d.confidence+"  "+d.lastRssi+"dBm  x"+d.sightings,28,y+19,14,dim);
                         }
                         idx++;
                     }
