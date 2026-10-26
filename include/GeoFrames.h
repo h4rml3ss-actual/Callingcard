@@ -38,11 +38,12 @@ inline bool formatGeoFrames(const Observation& o, uint16_t seq, GeoFrames& out) 
     out.hasPosition=snprintf(out.position,sizeof(out.position),"P,%u,%ld,%ld",
       static_cast<unsigned>(seq),lat,lon)<static_cast<int>(sizeof(out.position));
   }
-  if(o.hasUtc && o.utc[0]) {
-    // UTC is transmitted as 10-digit seconds-since-2020? No fabricated epoch:
-    // ISO time HHMMSS fragment retained; full UTC stays on SD JSONL.
-    out.hasTimestamp=snprintf(out.timestamp,sizeof(out.timestamp),"T,%u,%.6s",
-      static_cast<unsigned>(seq),o.utc+11)<static_cast<int>(sizeof(out.timestamp));
+  if(o.hasUtc && o.utc[19]=='Z') {
+    char compact[13]={};
+    const unsigned indices[]={2,3,5,6,8,9,11,12,14,15,17,18};
+    for(unsigned i=0;i<12;++i)compact[i]=o.utc[indices[i]];
+    out.hasTimestamp=snprintf(out.timestamp,sizeof(out.timestamp),"T,%u,%s",
+      static_cast<unsigned>(seq),compact)<static_cast<int>(sizeof(out.timestamp));
   }
   return true;
 }
