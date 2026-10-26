@@ -38,6 +38,60 @@ inline WifiCandidate classifyWifi(const char* ssid,const char* bssid) {
   WifiCandidate result;
   uint8_t mac[3]={};
   const bool parsed=parseMacPrefix(bssid,mac);
+  // PR80: Specific Axon camera pairing-mode SSIDs. No generic AXON AP rule.
+  bool axonSsid=false;
+  if(ssid) {
+    const char* prefixes[]={"AB2-","AB3-","AB4-"};
+    for(unsigned i=0;i<3;++i) {
+      bool equal=true;
+      for(unsigned j=0;j<4;++j) {
+        char c=ssid[j];
+        if(!c) {equal=false;break;}
+        if(c>='a'&&c<='z')c=static_cast<char>(c-('a'-'A'));
+        if(c!=prefixes[i][j]){equal=false;break;}
+      }
+      if(equal && ssid[4])axonSsid=true;
+    }
+  }
+  const bool axonOui=parsed &&
+    ((mac[0]==0x00&&mac[1]==0x25&&mac[2]==0xDF) ||
+     (mac[0]==0xE4&&mac[1]==0x05&&mac[2]==0x40));
+  if(axonSsid || axonOui) {
+    const DetectionEvidence ev[2]={
+      {EvidenceType::WifiSsid,MatchStrength::Moderate,
+        "axon-pairing-ssid","SquachWatch-CYD/docs/DETECTIONS.md"},
+      {EvidenceType::WifiBssid,MatchStrength::Weak,
+        "axon-vendor-oui","SquachWatch-CYD/docs/DETECTIONS.md"}
+    };
+    if(axonSsid && axonOui) {
+      result.detection=classify(DetectionType::Axon,ev,2);
+      if(result.detection.confidence==Confidence::High)
+        result.detection.confidence=Confidence::Medium;
+      result.ruleId="axon-pairing-ssid+vendor-oui";
+    } else {
+      const DetectionEvidence& evidence=axonSsid?ev[0]:ev[1];
+      result.detection=classify(DetectionType::Axon,&evidence,1);
+      result.ruleId=evidence.ruleId;
+    }
+    return result;
+  }
+  // Dedicated camera-vendor MA-L allocations; weak candidate only.
+  struct CameraOui {uint8_t a,b,c;const char* rule;};
+  static const CameraOui cameras[]={
+    {0xE0,0xA7,0x00,"camera-verkada-e0a700"},
+    {0x70,0x1A,0xD5,"camera-avigilon-701ad5"},
+    {0x00,0x40,0x8C,"camera-axis-00408c"},
+    {0xB8,0xA4,0x4F,"camera-axis-b8a44f"}
+  };
+  if(parsed)for(unsigned i=0;i<sizeof(cameras)/sizeof(cameras[0]);++i) {
+    const CameraOui& v=cameras[i];
+    if(mac[0]==v.a && mac[1]==v.b && mac[2]==v.c) {
+      const DetectionEvidence ev={EvidenceType::WifiBssid,MatchStrength::Weak,
+        v.rule,"SquachWatch-CYD/docs/DETECTIONS.md registry audit"};
+      result.detection=classify(DetectionType::Camera,&ev,1);
+      result.ruleId=v.rule;return result;
+    }
+  }
   // PR69: Vendor-owned allocations verified by SquachWatch's IEEE audit.
   // A Motorola Solutions or Genetec AP is NOT necessarily an ALPR device.
   // Deliberately LOW candidate confidence; no automatic high-certainty claim.
