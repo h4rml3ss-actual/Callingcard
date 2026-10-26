@@ -374,7 +374,16 @@ void drainBleSamples(uint8_t maximum = 8) {
         callingcard::confidenceName(candidate.detection.confidence),
         candidate.ruleId,snapshot.rssiDbm);
     }
-    pipeline.enqueue(snapshot); // Already tagged at callback time, never re-annotate.
+    if(candidate.detection.valid) {
+      snapshot.hasDetection=true;
+      snprintf(snapshot.detectionType,sizeof(snapshot.detectionType),"%s",
+               callingcard::detectionTypeName(candidate.detection.type));
+      snprintf(snapshot.detectionConfidence,sizeof(snapshot.detectionConfidence),"%s",
+               callingcard::confidenceName(candidate.detection.confidence));
+      snprintf(snapshot.detectionRule,sizeof(snapshot.detectionRule),"%s",
+               candidate.ruleId?candidate.ruleId:"");
+    }
+    pipeline.enqueue(snapshot); // All classification and GNSS fields snapshot together.
 #if CALLINGCARD_BLADE_DETAILS
     // BLE callbacks use the fixed prequeue; forward from main loop so the HUD sees them.
     blade.queueDetail('B', 0, snapshot.rssiDbm, snapshot.label);
@@ -405,6 +414,18 @@ void addObservation(const callingcard::Observation& observation) {
         callingcard::detectionTypeName(match.detection.type),
         callingcard::confidenceName(match.detection.confidence),match.ruleId,
         enriched.rssiDbm,enriched.channel);
+    }
+  }
+  if(enriched.kind==callingcard::Kind::WifiNetwork) {
+    const auto classified=callingcard::classifyWifi(enriched.label,enriched.wifiBssid);
+    if(classified.detection.valid) {
+      enriched.hasDetection=true;
+      snprintf(enriched.detectionType,sizeof(enriched.detectionType),"%s",
+               callingcard::detectionTypeName(classified.detection.type));
+      snprintf(enriched.detectionConfidence,sizeof(enriched.detectionConfidence),"%s",
+               callingcard::confidenceName(classified.detection.confidence));
+      snprintf(enriched.detectionRule,sizeof(enriched.detectionRule),"%s",
+               classified.ruleId?classified.ruleId:"");
     }
   }
   pipeline.enqueue(enriched);
