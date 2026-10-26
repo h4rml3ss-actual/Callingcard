@@ -20,4 +20,20 @@ int main() {
   const auto camera=classifyBle("GoPro-001",false,0,nullptr);
   assert(camera.detection.valid && camera.detection.type==DetectionType::Camera);
   assert(camera.detection.confidence==Confidence::Low);
+  assert(shortServiceUuid("FD5A")==0xFD5A);
+  assert(shortServiceUuid("0000fd5f-0000-1000-8000-00805f9b34fb")==0xFD5F);
+  assert(shortServiceUuid("garbage")==0);
+  assert(shortServiceUuid("0000fd5f-0000-1000-8000-00805f9b34fc")==0);
+  auto samsung=classifyBle("<unnamed BLE>",false,0,"fd5a");
+  assert(samsung.detection.valid && samsung.detection.type==DetectionType::Tracker);
+  assert(samsung.detection.confidence==Confidence::Medium);
+  auto tileService=classifyBle("unknown",false,0,"0000feed-0000-1000-8000-00805f9b34fb");
+  assert(tileService.detection.valid && tileService.detection.type==DetectionType::Tracker);
+  assert(tileService.detection.confidence==Confidence::Medium);
+  auto meta=classifyBle("unknown",false,0,"FD5F");
+  assert(meta.detection.valid && meta.detection.type==DetectionType::Meta);
+  assert(meta.detection.confidence==Confidence::Medium);
+  assert(!classifyBle("unknown",true,0x004c,"FEAA").detection.valid);
+  assert(!classifyBle("unknown",true,0x01ab,nullptr).detection.valid);
+
 }
