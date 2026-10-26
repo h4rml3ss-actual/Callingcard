@@ -372,6 +372,10 @@ void drainBleSamples(uint8_t maximum = 8) {
           callingcard::detectionTypeName(candidate.detection.type));
         snprintf(geo.detectionConfidence,sizeof(geo.detectionConfidence),"%s",
           callingcard::confidenceName(candidate.detection.confidence));
+#if CALLINGCARD_BLADE_EVIDENCE_V3
+        snprintf(geo.detectionRule,sizeof(geo.detectionRule),"%s",
+          candidate.ruleId?candidate.ruleId:"");
+#endif
         blade.queueGeoDetection(geo);
 #else
         blade.queueDetection(candidate.detection.type,candidate.detection.confidence,snapshot.rssiDbm,'B');
