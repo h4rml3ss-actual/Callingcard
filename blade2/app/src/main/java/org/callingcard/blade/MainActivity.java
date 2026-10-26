@@ -405,8 +405,8 @@ public class MainActivity extends Activity {
             if(parts.length==4 && parts[0].equals("P")) {
                 try {
                     int seq=Integer.parseInt(parts[1]);
-                    long latitude=Integer.parseLong(parts[2]);
-                    long longitude=Integer.parseLong(parts[3]);
+                    long latitude=Long.parseLong(parts[2]);
+                    long longitude=Long.parseLong(parts[3]);
                     if(seq!=lastGeoSequence || latitude< -900000||latitude>900000||
                         longitude< -1800000||longitude>1800000)return;
                     lastAlert=lastGeoSummary+" / "+(latitude/10000.0)+","+(longitude/10000.0);
