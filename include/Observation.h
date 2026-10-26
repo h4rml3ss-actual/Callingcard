@@ -13,6 +13,9 @@ struct Observation {
   float snrDb = 0.0f; // Only meaningful for LoRaPacket.
   char label[24] = {};
   char wifiBssid[18] = {}; // Full BSSID for local classification; not sent over Blade GATT.
+  bool bleHasCompanyId = false;
+  uint16_t bleCompanyId = 0; // Advertising company identifier (not device identity).
+  char bleServiceUuid[37] = {}; // First advertised service UUID, if any.
   // Snapshot at observation creation; never retroactively enrich queued events.
   bool hasUtc = false;
   char utc[25] = {}; // UTC ISO8601 second precision, Z suffix.
