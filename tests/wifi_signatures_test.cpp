@@ -33,4 +33,27 @@ int main(){
   assert(!classifyWifi("ordinary-network","02:04:7D:11:22:33").detection.valid);
   assert(!classifyWifi("ordinary-network","4C:CC:34:XX:22:33").detection.valid);
 
+  const char* axonNames[]={"AB2-1234","ab3-TEST","AB4-9012"};
+  for(const char* name:axonNames) {
+    auto found=classifyWifi(name,"00:11:22:33:44:55");
+    assert(found.detection.valid && found.detection.type==DetectionType::Axon);
+    assert(found.detection.confidence!=Confidence::High);
+  }
+  assert(!classifyWifi("AB2","00:11:22:33:44:55").detection.valid);
+  assert(!classifyWifi("AB2-","00:11:22:33:44:55").detection.valid);
+  assert(!classifyWifi("AXONOMY","00:11:22:33:44:55").detection.valid);
+  for(const char* mac:{"00:25:DF:11:22:33","E4:05:40:11:22:33"}) {
+    auto found=classifyWifi("ordinary",mac);
+    assert(found.detection.valid && found.detection.type==DetectionType::Axon);
+    assert(found.detection.confidence==Confidence::Low);
+  }
+  const char* cameraMacs[]={"E0:A7:00:11:22:33","70:1A:D5:11:22:33",
+                            "00:40:8C:11:22:33","B8:A4:4F:11:22:33"};
+  for(const char* mac:cameraMacs) {
+    auto found=classifyWifi("ordinary",mac);
+    assert(found.detection.valid && found.detection.type==DetectionType::Camera);
+    assert(found.detection.confidence==Confidence::Low);
+  }
+  assert(!classifyWifi("ordinary","24:0A:C4:00:11:22").detection.valid);
+  assert(!classifyWifi("ordinary","02:A7:00:11:22:33").detection.valid);
 }
