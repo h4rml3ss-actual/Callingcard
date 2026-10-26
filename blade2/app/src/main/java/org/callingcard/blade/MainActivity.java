@@ -45,6 +45,35 @@ public class MainActivity extends Activity {
     private boolean bonding = false;
     private boolean bondFailed = false; // No repeated PIN prompts after a failed enrollment.
     private boolean bondingRegistered = false;
+    private int lastPairingVariant = -1;
+    private long bondStartedMs = -1;
+    private String pairingVariantName(int variant) {
+        switch (variant) {
+            case BluetoothDevice.PAIRING_VARIANT_PIN: return "PIN_LEGACY_OR_STACK_SPECIFIC";
+            case BluetoothDevice.PAIRING_VARIANT_PASSKEY: return "PASSKEY_ENTRY";
+            case BluetoothDevice.PAIRING_VARIANT_PASSKEY_CONFIRMATION: return "PASSKEY_CONFIRMATION";
+            case BluetoothDevice.PAIRING_VARIANT_CONSENT: return "CONSENT";
+            case BluetoothDevice.PAIRING_VARIANT_DISPLAY_PASSKEY: return "DISPLAY_PASSKEY";
+            case BluetoothDevice.PAIRING_VARIANT_DISPLAY_PIN: return "DISPLAY_PIN";
+            case BluetoothDevice.PAIRING_VARIANT_OOB_CONSENT: return "OOB_CONSENT";
+            default: return "UNKNOWN_" + variant;
+        }
+    }
+    private final BroadcastReceiver pairingReceiver = new BroadcastReceiver() {
+        @Override public void onReceive(Context context, Intent intent) {
+            if (!BluetoothDevice.ACTION_PAIRING_REQUEST.equals(intent.getAction())) return;
+            BluetoothDevice device = intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE);
+            if (device == null || pendingBond == null ||
+                !device.getAddress().equals(pendingBond.getAddress())) return;
+            lastPairingVariant = intent.getIntExtra(BluetoothDevice.EXTRA_PAIRING_VARIANT, -1);
+            Log.i(TAG, "SMP pairing_request variant=" + lastPairingVariant +
+                       " name=" + pairingVariantName(lastPairingVariant) +
+                       " attempt=" + connectionAttempt +
+                       " receiver_observed_only=1");
+            // Do not consume, abort or answer the system pairing broadcast;
+            // Vuzix's privileged handler owns PIN input.
+        }
+    };
     // All connection state lives on the main looper. A non-null GATT is the
     // single owner, including while connectGatt() is still connecting.
     private long connectionAttempt = 0;
@@ -55,7 +84,16 @@ public class MainActivity extends Activity {
             BluetoothDevice device=intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE);
             if(device==null || pendingBond==null || !device.getAddress().equals(pendingBond.getAddress())) return;
             int state=intent.getIntExtra(BluetoothDevice.EXTRA_BOND_STATE,BluetoothDevice.BOND_NONE);
-            Log.i(TAG,"bond state="+state);
+            final int previous = intent.getIntExtra(
+                BluetoothDevice.EXTRA_PREVIOUS_BOND_STATE, -1);
+            String elapsed = bondStartedMs < 0 ? "unknown" :
+                Long.toString(SystemClock.elapsedRealtime() - bondStartedMs);
+            Log.i(TAG,"SMP bond state=" + state + " previous=" + previous +
+                      " pairing_variant=" + pairingVariantName(lastPairingVariant) +
+                      " elapsed_ms=" + elapsed + " attempt=" + connectionAttempt);
+            if (state == BluetoothDevice.BOND_BONDING) {
+                bondStartedMs = SystemClock.elapsedRealtime();
+            }
             if(state==BluetoothDevice.BOND_BONDED) {
                 bonding=false;
                 bondFailed=false;
@@ -171,6 +209,7 @@ public class MainActivity extends Activity {
         setContentView(graphical);
         active = true;
         registerReceiver(bondReceiver,new IntentFilter(BluetoothDevice.ACTION_BOND_STATE_CHANGED));
+        registerReceiver(pairingReceiver,new IntentFilter(BluetoothDevice.ACTION_PAIRING_REQUEST));
         bondingRegistered=true;
         handler.post(freshnessTicker);
         if (Build.VERSION.SDK_INT >= 31 &&
@@ -407,7 +446,10 @@ public class MainActivity extends Activity {
         active = false;
         stopScan();
         handler.removeCallbacksAndMessages(null);
-        if (bondingRegistered) unregisterReceiver(bondReceiver);
+        if (bondingRegistered) {
+            unregisterReceiver(bondReceiver);
+            unregisterReceiver(pairingReceiver);
+        }
         if (gatt != null && canConnect()) { gatt.disconnect(); gatt.close(); gatt = null; }
         super.onDestroy();
     }
