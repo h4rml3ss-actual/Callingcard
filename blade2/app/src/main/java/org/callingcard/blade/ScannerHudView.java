@@ -21,6 +21,25 @@ public final class ScannerHudView extends View {
             history.addLast(r);
         }
     }
+    static final class DetectionItem {
+        final String type, confidence, source;
+        final int rssi;
+        final long timestamp;
+        DetectionItem(String t,String c,int r,String src,long when) {
+            type=t;confidence=c;rssi=r;source=src;timestamp=when;
+        }
+    }
+    private final ArrayDeque<DetectionItem> detections=new ArrayDeque<>();
+    private int detectionSelection=0;
+    private boolean detectionDetail=false;
+    void addDetection(String type,String confidence,int rssi,String source) {
+        long now=android.os.SystemClock.elapsedRealtime();
+        // Bounded transient on-device history, newest first; no addresses or GPS.
+        if(detections.size()>=24)detections.removeLast();
+        detections.addFirst(new DetectionItem(type,confidence,rssi,source,now));
+        detectionSelection=0;
+        invalidate();
+    }
     final ArrayDeque<Item>[] items;
     // Keep raw Wi-Fi sightings for the 120-second channel histogram.
     final ArrayDeque<Item> wifiSamples = new ArrayDeque<>();
@@ -87,9 +106,9 @@ public final class ScannerHudView extends View {
             selectedItem=updated;
         invalidate();
     }
-    void next(int delta) { if(detailOpen)return; page=(page+delta+4)%4; selection=0;selectedKey=null;invalidate(); }
+    void next(int delta) { if(detailOpen||detectionDetail)return; page=(page+delta+5)%5; detectionSelection=0; selection=0;selectedKey=null;invalidate(); }
     boolean toggleOld() {
-        if(page==0||detailOpen)return false;
+        if(page==0||page==4||detailOpen)return false;
         showOld=!showOld;
         selection=0;selectedKey=null;invalidate();return true;
     }
@@ -99,7 +118,7 @@ public final class ScannerHudView extends View {
     }
     private ArrayList<Item> newestFirst() {
         ArrayList<Item> result=new ArrayList<>();
-        if(page==0)return result;
+        if(page==0||page==4)return result;
         long now=android.os.SystemClock.elapsedRealtime();
         for(Item item:items[page-1]) {
             if(now-item.timestamp>RETAIN_MS)continue;
@@ -109,6 +128,11 @@ public final class ScannerHudView extends View {
         return result;
     }
     boolean moveSelection(int delta) {
+        if(page==4) {
+            if(detectionDetail)return false;
+            detectionSelection=Math.max(0,Math.min(detections.size()-1,detectionSelection+delta));
+            invalidate();return true;
+        }
         if(page==0||detailOpen)return false;
         ArrayList<Item> list=newestFirst();
         if(list.isEmpty())return true;
@@ -117,6 +141,10 @@ public final class ScannerHudView extends View {
         invalidate();return true;
     }
     boolean openSelected() {
+        if(page==4) {
+            if(detections.isEmpty())return true;
+            detectionDetail=true;invalidate();return true;
+        }
         if(page==0||detailOpen)return false;
         ArrayList<Item> list=newestFirst();
         if(list.isEmpty())return true;
@@ -126,6 +154,7 @@ public final class ScannerHudView extends View {
         invalidate();return true;
     }
     boolean back() {
+        if(detectionDetail){detectionDetail=false;invalidate();return true;}
         if(!detailOpen)return false;
         detailOpen=false;selectedItem=null;invalidate();return true;
     }
@@ -158,8 +187,44 @@ public final class ScannerHudView extends View {
         p.setColor(Color.rgb(20,47,37));c.drawRoundRect(10,10,470,470,15,15,p);
         txt(c,"CALLINGCARD",27,52,30,green);
         txt(c,health,320,52,22,tint());
-        txt(c,"<  "+new String[]{"OVERVIEW","Wi-Fi","BLE","LoRa"}[page]+"  >",30,96,26,white);
+        txt(c,"<  "+new String[]{"OVERVIEW","Wi-Fi","BLE","LoRa","DETECTIONS"}[page]+"  >",30,96,26,white);
         p.setColor(dim);c.drawRect(26,112,454,114,p);
+        if(page==4) {
+            txt(c,"CANDIDATES / "+detections.size(),28,147,22,white);
+            if(detections.isEmpty())txt(c,"No classified detections",28,211,19,dim);
+            else {
+                int idx=0;
+                for(DetectionItem d:detections) {
+                    if(idx==detectionSelection && detectionDetail) {
+                        txt(c,"POSSIBLE "+d.type,28,204,25,Color.YELLOW);
+                        txt(c,"CONFIDENCE "+d.confidence,28,251,20,white);
+                        txt(c,"SIGNAL "+d.rssi+" dBm",28,298,20,green);
+                        txt(c,"SOURCE "+d.source,28,341,20,white);
+                        long age=(android.os.SystemClock.elapsedRealtime()-d.timestamp)/1000;
+                        txt(c,"SEEN "+age+"s ago",28,384,19,dim);
+                        txt(c,"Candidate, not identity proof",28,434,15,Color.YELLOW);
+                        break;
+                    }
+                    ++idx;
+                }
+                if(!detectionDetail) {
+                    int start=Math.max(0,detectionSelection-5);idx=0;
+                    for(DetectionItem d:detections) {
+                        if(idx>=start && idx<start+6) {
+                            int y=191+(idx-start)*46;
+                            if(idx==detectionSelection) {
+                                p.setColor(Color.rgb(48,88,68));c.drawRoundRect(21,y-23,454,y+13,5,5,p);
+                            }
+                            String name="POSSIBLE "+d.type;
+                            txt(c,name,28,y,19,Color.YELLOW);
+                            txt(c,d.confidence+"  "+d.rssi+"dBm",28,y+19,14,dim);
+                        }
+                        idx++;
+                    }
+                }
+            }
+            c.restore();return;
+        }
         if(detailOpen && selectedItem!=null) {
             Item item=selectedItem;
             txt(c,"OBSERVATION DETAIL",28,149,24,green);

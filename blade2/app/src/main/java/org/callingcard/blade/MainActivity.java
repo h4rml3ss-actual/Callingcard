@@ -385,6 +385,9 @@ public class MainActivity extends Activity {
                         (confidence.equals("L")?"LOW":confidence.equals("M")?"MEDIUM":"HIGH") +
                         " / " + rssi + " dBm / " + (source.equals("W")?"Wi-Fi":"BLE");
                     lastAlert=message;
+                    graphical.addDetection(type,
+                        confidence.equals("L")?"LOW":confidence.equals("M")?"MEDIUM":"HIGH",
+                        rssi,source.equals("W")?"Wi-Fi":"BLE");
                     graphical.alert=message;
                     lastAlertMs=SystemClock.elapsedRealtime();
                     Log.i(TAG,"candidate detection: "+message);
