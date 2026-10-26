@@ -364,8 +364,19 @@ void drainBleSamples(uint8_t maximum = 8) {
       snapshot.bleHasCompanyId,snapshot.bleCompanyId,snapshot.bleServiceUuid);
     if(candidate.detection.valid) {
 #if CALLINGCARD_BLADE_DETAILS
-      if(detectionCooldown.accept(candidate.detection.type,candidate.ruleId,'B',snapshot.uptimeMs))
+      if(detectionCooldown.accept(candidate.detection.type,candidate.ruleId,'B',snapshot.uptimeMs)) {
+#if CALLINGCARD_BLADE_GEO_V2
+        callingcard::Observation geo=snapshot;
+        geo.hasDetection=true;
+        snprintf(geo.detectionType,sizeof(geo.detectionType),"%s",
+          callingcard::detectionTypeName(candidate.detection.type));
+        snprintf(geo.detectionConfidence,sizeof(geo.detectionConfidence),"%s",
+          callingcard::confidenceName(candidate.detection.confidence));
+        blade.queueGeoDetection(geo);
+#else
         blade.queueDetection(candidate.detection.type,candidate.detection.confidence,snapshot.rssiDbm,'B');
+#endif
+      }
 #endif
       // Low-confidence name heuristic only. No raw advertisement bytes, addresses,
       // exact device IDs or GPS coordinates in the unencrypted HUD stream.
@@ -406,8 +417,19 @@ void addObservation(const callingcard::Observation& observation) {
     const auto match=callingcard::classifyWifi(enriched.label,enriched.wifiBssid);
     if(match.detection.valid) {
 #if CALLINGCARD_BLADE_DETAILS
-      if(detectionCooldown.accept(match.detection.type,match.ruleId,'W',enriched.uptimeMs))
+      if(detectionCooldown.accept(match.detection.type,match.ruleId,'W',enriched.uptimeMs)) {
+#if CALLINGCARD_BLADE_GEO_V2
+        callingcard::Observation geo=enriched;
+        geo.hasDetection=true;
+        snprintf(geo.detectionType,sizeof(geo.detectionType),"%s",
+          callingcard::detectionTypeName(match.detection.type));
+        snprintf(geo.detectionConfidence,sizeof(geo.detectionConfidence),"%s",
+          callingcard::confidenceName(match.detection.confidence));
+        blade.queueGeoDetection(geo);
+#else
         blade.queueDetection(match.detection.type,match.detection.confidence,enriched.rssiDbm,'W');
+#endif
+      }
 #endif
       // Classification is observational; no high-trust alert or device-ID over BLE.
       Serial.printf("DETECT candidate=%s confidence=%s rule=%s rssi=%d channel=%d\\n",
