@@ -73,6 +73,15 @@ void EventPipeline::printEvent(Print& out, const Observation& o) {
     out.print(o.detectionRule);
     out.print(F("\"}"));
   }
+  if(o.hasCorrelation) {
+    out.print(F(",\"correlation\":{\"scope\":\"session_address_type\",\"sightings\":"));
+    out.print(o.correlationSightings);
+    out.print(F(",\"peak_rssi_dbm\":"));
+    out.print(o.correlationPeakRssi);
+    out.print(F(",\"first_uptime_ms\":"));
+    out.print(o.correlationFirstUptimeMs);
+    out.print('}');
+  }
   out.print(F(",\"position\":"));
   if (o.hasPosition) {
     out.print(F("{\"lat\":"));
