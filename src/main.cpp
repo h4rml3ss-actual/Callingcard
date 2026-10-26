@@ -360,8 +360,7 @@ void drainBleSamples(uint8_t maximum = 8) {
     portEXIT_CRITICAL(&bleMux);
     if (!hasSample) return;
     if (latestCount < kMaxLines) latest[latestCount++] = snapshot;
-    const auto candidate=callingcard::classifyBle(snapshot.label,
-      snapshot.bleHasCompanyId,snapshot.bleCompanyId,snapshot.bleServiceUuid);
+    const auto candidate=callingcard::classifyBleObservation(snapshot);
     if(candidate.detection.valid) {
 #if CALLINGCARD_BLADE_DETAILS
       if(detectionCooldown.accept(candidate.detection.type,candidate.ruleId,'B',snapshot.uptimeMs)) {
@@ -484,16 +483,28 @@ class AdvertisedCallback : public BLEAdvertisedDeviceCallbacks {
             name.empty() ? "<unnamed BLE>" : name.c_str());
    if (device.haveManufacturerData()) {
      const std::string data=device.getManufacturerData();
+     const size_t copy=data.size()<sizeof(item.bleManufacturer)?
+         data.size():sizeof(item.bleManufacturer);
+     item.bleManufacturerLength=static_cast<uint8_t>(copy);
+     for(size_t j=0;j<copy;++j)
+       item.bleManufacturer[j]=static_cast<uint8_t>(data[j]);
+     item.bleAdvertisementTruncated=data.size()>copy;
      if (data.size()>=2) {
        item.bleHasCompanyId=true;
        item.bleCompanyId=static_cast<uint16_t>(
-         static_cast<uint8_t>(data[0]) |
-         (static_cast<uint16_t>(static_cast<uint8_t>(data[1]))<<8));
+         item.bleManufacturer[0] |
+         (static_cast<uint16_t>(item.bleManufacturer[1])<<8));
      }
    }
    if (device.haveServiceUUID()) {
-     const std::string uuid=device.getServiceUUID().toString();
-     snprintf(item.bleServiceUuid,sizeof(item.bleServiceUuid),"%s",uuid.c_str());
+     const int count=device.getServiceUUIDCount();
+     if(count>4)item.bleAdvertisementTruncated=true;
+     for(int j=0;j<count && j<4;++j) {
+       const std::string uuid=device.getServiceUUID(j).toString();
+       snprintf(item.bleServices[j],sizeof(item.bleServices[j]),"%s",uuid.c_str());
+       ++item.bleServiceCount;
+       if(j==0)snprintf(item.bleServiceUuid,sizeof(item.bleServiceUuid),"%s",uuid.c_str());
+     }
    }
    portENTER_CRITICAL(&bleMux);
    ++bleCallbacks;
