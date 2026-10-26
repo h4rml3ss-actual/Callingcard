@@ -31,6 +31,9 @@ public final class ScannerHudView extends View {
         String confidence;
         int lastRssi, strongestRssi, sightings;
         long firstSeen, lastSeen;
+        int geoSequence=-1;
+        String identifier="", rule="", utc="";
+        Double latitude=null,longitude=null;
         DetectionItem(String t,String c,int r,String src,long when) {
             type=t;confidence=c;source=src;
             lastRssi=r;strongestRssi=r;sightings=1;
@@ -88,6 +91,9 @@ public final class ScannerHudView extends View {
         }
     }
     void addDetection(String type,String confidence,int rssi,String source) {
+        addDetection(type,confidence,rssi,source,-1);
+    }
+    void addDetection(String type,String confidence,int rssi,String source,int sequence) {
         long now=System.currentTimeMillis();
         Iterator<DetectionItem> prune=detections.iterator();
         while(prune.hasNext())if(now-prune.next().lastSeen>RETENTION_MS)prune.remove();
@@ -101,6 +107,9 @@ public final class ScannerHudView extends View {
         if(match!=null) {
             detections.remove(match);
             match.lastSeen=now;match.lastRssi=rssi;
+            match.geoSequence=sequence;
+            match.identifier="";match.rule="";match.utc="";
+            match.latitude=null;match.longitude=null;
             match.strongestRssi=Math.max(match.strongestRssi,rssi);
             match.sightings=Math.min(9999,match.sightings+1);
             if(confidenceRank(confidence)>confidenceRank(match.confidence))
@@ -108,11 +117,37 @@ public final class ScannerHudView extends View {
             detections.addFirst(match);
         } else {
             if(detections.size()>=24)detections.removeLast();
-            detections.addFirst(new DetectionItem(type,confidence,rssi,source,now));
+            DetectionItem fresh=new DetectionItem(type,confidence,rssi,source,now);
+            fresh.geoSequence=sequence;
+            detections.addFirst(fresh);
         }
         detectionSelection=0;
         saveDetections();
         invalidate();
+    }
+    // Enrich only the group associated with the latest H sequence.
+    // Never infer that two observations sharing a category are one device.
+    void updateDetectionEvidence(int seq,String field,String value) {
+        for(DetectionItem d:detections) {
+            if(d.geoSequence!=seq)return;
+            if("I".equals(field))d.identifier=value;
+            else if("R".equals(field))d.rule=value;
+            else return;
+            invalidate();return;
+        }
+    }
+    void updateDetectionLocation(int seq,double lat,double lon) {
+        for(DetectionItem d:detections) {
+            if(d.geoSequence!=seq)return;
+            d.latitude=lat;d.longitude=lon;
+            invalidate();return;
+        }
+    }
+    void updateDetectionUtc(int seq,String utc) {
+        for(DetectionItem d:detections) {
+            if(d.geoSequence!=seq)return;
+            d.utc=utc;invalidate();return;
+        }
     }
     final ArrayDeque<Item>[] items;
     // Keep raw Wi-Fi sightings for the 120-second channel histogram.
@@ -272,14 +307,20 @@ public final class ScannerHudView extends View {
                 int idx=0;
                 for(DetectionItem d:detections) {
                     if(idx==detectionSelection && detectionDetail) {
-                        txt(c,"POSSIBLE "+d.type,28,204,25,Color.YELLOW);
-                        txt(c,"CONFIDENCE "+d.confidence,28,251,20,white);
-                        txt(c,"SIGNAL "+d.lastRssi+" dBm",28,298,20,green);
-                        txt(c,"SOURCE "+d.source,28,341,20,white);
-                        long age=(System.currentTimeMillis()-d.lastSeen)/1000;
-                        txt(c,"LAST SEEN "+Math.max(0,age)+"s ago",28,383,17,dim);
-                        txt(c,"SIGHTINGS "+d.sightings+"  PEAK "+d.strongestRssi+"dBm",28,407,15,white);
-                        txt(c,"Grouped alerts, not device IDs",28,438,15,Color.YELLOW);
+                        txt(c,"POSSIBLE "+d.type,28,185,23,Color.YELLOW);
+                        txt(c,d.confidence+"  "+d.lastRssi+"dBm  "+d.source,28,215,17,white);
+                        txt(c,"ID: "+(d.identifier.isEmpty()?"unavailable":d.identifier),28,246,16,green);
+                        txt(c,"RULE:",28,274,16,dim);
+                        String rule=d.rule.isEmpty()?"unavailable":d.rule;
+                        for(int j=0;j<rule.length() && j<72;j+=30)
+                            txt(c,rule.substring(j,Math.min(rule.length(),j+30)),
+                                28,298+(j/30)*20,14,white);
+                        if(d.latitude!=null && d.longitude!=null) {
+                            txt(c,"GPS "+d.latitude+", "+d.longitude,28,365,15,green);
+                        } else txt(c,"GPS unavailable",28,365,15,dim);
+                        txt(c,"UTC "+(d.utc.isEmpty()?"unavailable":d.utc),28,390,15,white);
+                        txt(c,"SEEN "+d.sightings+"  PEAK "+d.strongestRssi+"dBm",28,417,15,dim);
+                        txt(c,"Candidate evidence - not confirmed",28,447,14,Color.YELLOW);
                         break;
                     }
                     ++idx;
