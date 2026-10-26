@@ -57,6 +57,15 @@ void EventPipeline::printEvent(Print& out, const Observation& o) {
     out.print(o.utc);
     out.print('"');
   } else out.print(F("null"));
+  if (o.hasDetection) {
+    out.print(F(",\"detection\":{\"type\":\""));
+    out.print(o.detectionType);
+    out.print(F("\",\"confidence\":\""));
+    out.print(o.detectionConfidence);
+    out.print(F("\",\"rule\":\""));
+    out.print(o.detectionRule);
+    out.print(F("\"}"));
+  }
   out.print(F(",\"position\":"));
   if (o.hasPosition) {
     out.print(F("{\"lat\":"));
