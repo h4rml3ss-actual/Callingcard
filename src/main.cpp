@@ -10,6 +10,7 @@
 #include "Observation.h"
 #include "WifiSignatures.h"
 #include "BleSignatures.h"
+#include "DetectionCooldown.h"
 #include "CapSensors.h"
 #include "EventPipeline.h"
 #include "SessionStats.h"
@@ -44,6 +45,7 @@ uint32_t lastScanEndMs = 0;
 uint32_t nextCapLogMs = 0;
 callingcard::CapSensors cap;
 callingcard::EventPipeline pipeline;
+callingcard::DetectionCooldown detectionCooldown;
 #if CALLINGCARD_BLADE_POC
 callingcard::BladeTelemetry blade;
 #endif
@@ -304,6 +306,10 @@ void drainBleSamples(uint8_t maximum = 8) {
     const auto candidate=callingcard::classifyBle(snapshot.label,
       snapshot.bleHasCompanyId,snapshot.bleCompanyId,snapshot.bleServiceUuid);
     if(candidate.detection.valid) {
+#if CALLINGCARD_BLADE_DETAILS
+      if(detectionCooldown.accept(candidate.detection.type,candidate.ruleId,'B',snapshot.uptimeMs))
+        blade.queueDetection(candidate.detection.type,candidate.detection.confidence,snapshot.rssiDbm,'B');
+#endif
       // Low-confidence name heuristic only. No raw advertisement bytes, addresses,
       // exact device IDs or GPS coordinates in the unencrypted HUD stream.
       Serial.printf("DETECT candidate=%s confidence=%s rule=%s rssi=%d source=ble\\n",
@@ -333,6 +339,10 @@ void addObservation(const callingcard::Observation& observation) {
   if(enriched.kind==callingcard::Kind::WifiNetwork) {
     const auto match=callingcard::classifyWifi(enriched.label,enriched.wifiBssid);
     if(match.detection.valid) {
+#if CALLINGCARD_BLADE_DETAILS
+      if(detectionCooldown.accept(match.detection.type,match.ruleId,'W',enriched.uptimeMs))
+        blade.queueDetection(match.detection.type,match.detection.confidence,enriched.rssiDbm,'W');
+#endif
       // Classification is observational; no high-trust alert or device-ID over BLE.
       Serial.printf("DETECT candidate=%s confidence=%s rule=%s rssi=%d channel=%d\\n",
         callingcard::detectionTypeName(match.detection.type),

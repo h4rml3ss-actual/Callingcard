@@ -373,6 +373,25 @@ public class MainActivity extends Activity {
         final String wire = new String(raw, StandardCharsets.UTF_8);
         handler.post(() -> {
             String[] parts = wire.split(",", -1);
+            if (parts.length == 5 && parts[0].equals("C")) {
+                String type=parts[1], confidence=parts[2], source=parts[4];
+                if (!Arrays.asList("FLOCK","ALPR","AXON","CAMERA","TRACKER","META","SKIMMER").contains(type)
+                    || !Arrays.asList("L","M","H").contains(confidence)
+                    || !Arrays.asList("W","B").contains(source)) return;
+                try {
+                    int rssi=Integer.parseInt(parts[3]);
+                    if (rssi < -127 || rssi > 20) return;
+                    String message="POSSIBLE " + type + " / " +
+                        (confidence.equals("L")?"LOW":confidence.equals("M")?"MEDIUM":"HIGH") +
+                        " / " + rssi + " dBm / " + (source.equals("W")?"Wi-Fi":"BLE");
+                    lastAlert=message;
+                    graphical.alert=message;
+                    lastAlertMs=SystemClock.elapsedRealtime();
+                    Log.i(TAG,"candidate detection: "+message);
+                    renderHud();
+                } catch(NumberFormatException ignored) {}
+                return;
+            }
             if (parts.length != 3 || !parts[0].equals("E")) return;
             try {
                 int sequence = Integer.parseInt(parts[1]);

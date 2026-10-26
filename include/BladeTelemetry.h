@@ -1,5 +1,6 @@
 #pragma once
 #include <Arduino.h>
+#include "DetectionEngine.h"
 #if CALLINGCARD_BLADE_POC
 #include <BLEDevice.h>
 #include <BLEServer.h>
@@ -20,6 +21,17 @@ class BladeTelemetry {
     if (source != 'W' && source != 'B' && source != 'L') return;
     // Coalesce repeated observations and rate-limit to one alert / 4 seconds.
     if (pendingSource_ == 0) pendingSource_ = source;
+  }
+  // C,<type>,<confidence>,<RSSI>,<source>; bounded to legacy ATT payload.
+  void queueDetection(DetectionType type, Confidence confidence, int rssi, char source) {
+    if (type==DetectionType::Unknown || confidence==Confidence::None ||
+        (source!='W' && source!='B') || rssi < -127 || rssi > 20) return;
+    // Single pending slot: new candidates never overwrite an unsent alert.
+    if (pendingDetection_[0]) return;
+    const char rank=confidence==Confidence::High?'H':
+                    confidence==Confidence::Medium?'M':'L';
+    snprintf(pendingDetection_,sizeof(pendingDetection_),"C,%s,%c,%d,%c",
+             detectionTypeName(type),rank,rssi,source);
   }
   static constexpr const char* detailUuid() { return "cabb1e00-ccad-4abc-a112-24fc00000004"; }
 #if CALLINGCARD_BLADE_DETAILS
@@ -140,6 +152,17 @@ class BladeTelemetry {
 #if CALLINGCARD_BLADE_SECURE
         secureReady &&
 #endif
+        pendingDetection_[0]) {
+      alert_->setValue(pendingDetection_);
+      alert_->notify();
+      Serial.printf("BLADE detection=%s\\n",pendingDetection_);
+      pendingDetection_[0]=0;
+      lastAlertMs_=millis();
+    }
+    if (callbacks_.connected &&
+#if CALLINGCARD_BLADE_SECURE
+        secureReady &&
+#endif
         pendingSource_ && millis() - lastAlertMs_ >= 4000) {
       char alertValue[18] = {};
       snprintf(alertValue, sizeof(alertValue), "E,%lu,%c",
@@ -229,6 +252,7 @@ class BladeTelemetry {
   uint32_t detailDropped_ = 0;
   uint32_t lastDetailMs_ = 0;
 #endif
+  char pendingDetection_[32] = {};
   char pendingSource_ = 0;
   uint32_t lastAlertMs_ = 0;
   uint32_t alertSequence_ = 0;
