@@ -469,6 +469,8 @@ class AdvertisedCallback : public BLEAdvertisedDeviceCallbacks {
    item.uptimeMs = millis();
    item.rssiDbm = device.getRSSI();
    item.channel = -1;
+   const std::string address = device.getAddress().toString();
+   snprintf(item.bleAddress,sizeof(item.bleAddress),"%s",address.c_str());
    const std::string name = device.getName();
    snprintf(item.label, sizeof(item.label), "%s",
             name.empty() ? "<unnamed BLE>" : name.c_str());

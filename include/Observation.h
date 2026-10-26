@@ -12,7 +12,8 @@ struct Observation {
   int16_t channel = -1;
   float snrDb = 0.0f; // Only meaningful for LoRaPacket.
   char label[24] = {};
-  char wifiBssid[18] = {}; // Full BSSID for local classification; not sent over Blade GATT.
+  char wifiBssid[18] = {}; // Wi-Fi network identifier captured at observation time.
+  char bleAddress[18] = {}; // BLE advertiser address may be randomized/rotate.
   bool bleHasCompanyId = false;
   uint16_t bleCompanyId = 0; // Advertising company identifier (not device identity).
   char bleServiceUuid[37] = {}; // First advertised service UUID, if any.

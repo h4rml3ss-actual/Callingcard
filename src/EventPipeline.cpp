@@ -47,6 +47,13 @@ void EventPipeline::printEvent(Print& out, const Observation& o) {
   else out.print(o.channel);
   out.print(F(",\"label\":\""));
   printEscaped(out, o.label);
+  if (o.kind == Kind::WifiNetwork && o.wifiBssid[0]) {
+    out.print(F("\",\"bssid\":\""));
+    out.print(o.wifiBssid);
+  } else if (o.kind == Kind::BleAdvertisement && o.bleAddress[0]) {
+    out.print(F("\",\"ble_address\":\""));
+    out.print(o.bleAddress);
+  }
   if (o.kind == Kind::LoRaPacket) {
     out.print(F("\",\"snr_db\":"));
     out.print(o.snrDb, 1);
