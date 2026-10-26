@@ -8,6 +8,7 @@
 #include <SPI.h>
 #include <SD.h>
 #include "Observation.h"
+#include "WifiSignatures.h"
 #include "CapSensors.h"
 #include "EventPipeline.h"
 #include "SessionStats.h"
@@ -318,6 +319,16 @@ void addObservation(const callingcard::Observation& observation) {
   if (latestCount < kMaxLines) latest[latestCount++] = observation;
   callingcard::Observation enriched = observation;
   cap.annotate(enriched);
+  if(enriched.kind==callingcard::Kind::WifiNetwork) {
+    const auto match=callingcard::classifyWifi(enriched.label,enriched.wifiBssid);
+    if(match.detection.valid) {
+      // Classification is observational; no high-trust alert or device-ID over BLE.
+      Serial.printf("DETECT candidate=%s confidence=%s rule=%s rssi=%d channel=%d\\n",
+        callingcard::detectionTypeName(match.detection.type),
+        callingcard::confidenceName(match.detection.confidence),match.ruleId,
+        enriched.rssiDbm,enriched.channel);
+    }
+  }
   pipeline.enqueue(enriched);
 #if CALLINGCARD_BLADE_DETAILS
   if (enriched.kind == callingcard::Kind::WifiNetwork)
@@ -625,6 +636,8 @@ void serviceSurvey() {
         item.rssiDbm = WiFi.RSSI(i);
         item.channel = WiFi.channel(i);
         String ssid = WiFi.SSID(i);
+        String bssid = WiFi.BSSIDstr(i);
+        snprintf(item.wifiBssid, sizeof(item.wifiBssid), "%s", bssid.c_str());
         snprintf(item.label, sizeof(item.label), "%s",
                  ssid.length() ? ssid.c_str() : "<hidden>");
         addObservation(item);
