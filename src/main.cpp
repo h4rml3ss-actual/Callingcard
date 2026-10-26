@@ -3,6 +3,10 @@
 #include <Arduino.h>
 #include <M5Cardputer.h>
 #include <WiFi.h>
+#if CALLINGCARD_PASSIVE_WIFI
+#include <esp_wifi.h>
+#include "PassiveWifiFrames.h"
+#endif
 #include <BLEDevice.h>
 #include <BLEScan.h>
 #include <SPI.h>
@@ -256,8 +260,61 @@ void handleSessionKeys() {
   if (s && !priorS) stopSession();
   priorR = r; priorP = p; priorS = s;
 }
-enum class ScanMode { Idle, Wifi, Ble };
+enum class ScanMode { Idle, Wifi, Ble
+#if CALLINGCARD_PASSIVE_WIFI
+, Passive
+#endif
+};
 bool scanWifiNext = true; // Alternate Wi-Fi and BLE scans, starting with Wi-Fi.
+#if CALLINGCARD_PASSIVE_WIFI
+// Fixed 1.2 s dwell: channel changes only from main loop, never Wi-Fi callback.
+constexpr uint8_t kPassiveChannels[] = {1,6,11};
+constexpr uint32_t kPassiveDwellMs = 400;
+uint8_t passiveIndex = 0;
+uint32_t passiveNextHopMs = 0;
+uint32_t passiveRunCount = 0;
+volatile uint32_t passiveCounts[5] = {};
+bool passiveEnabled = false;
+void passiveCallback(void* buffer, wifi_promiscuous_pkt_type_t type) {
+  if (type != WIFI_PKT_MGMT || !buffer) return;
+  const wifi_promiscuous_pkt_t* pkt =
+      static_cast<const wifi_promiscuous_pkt_t*>(buffer);
+  const auto kind=callingcard::managementKind(pkt->payload,pkt->rx_ctrl.sig_len);
+  unsigned slot=5;
+  switch(kind) {
+    case callingcard::ManagementKind::Beacon:slot=0;break;
+    case callingcard::ManagementKind::ProbeRequest:slot=1;break;
+    case callingcard::ManagementKind::ProbeResponse:slot=2;break;
+    case callingcard::ManagementKind::Deauth:slot=3;break;
+    case callingcard::ManagementKind::Disassoc:slot=4;break;
+    default:break;
+  }
+  if(slot<5) __atomic_fetch_add(&passiveCounts[slot],1,__ATOMIC_RELAXED);
+}
+void stopPassive() {
+  if(passiveEnabled) {
+    esp_wifi_set_promiscuous(false);
+    passiveEnabled=false;
+  }
+}
+bool startPassive() {
+  for(unsigned i=0;i<5;++i) __atomic_store_n(&passiveCounts[i],0,__ATOMIC_RELAXED);
+  wifi_promiscuous_filter_t filter={};
+  filter.filter_mask=WIFI_PROMIS_FILTER_MASK_MGMT;
+  if(esp_wifi_set_promiscuous(false)!=ESP_OK ||
+     esp_wifi_set_promiscuous_filter(&filter)!=ESP_OK ||
+     esp_wifi_set_promiscuous_rx_cb(passiveCallback)!=ESP_OK ||
+     esp_wifi_set_channel(kPassiveChannels[0],WIFI_SECOND_CHAN_NONE)!=ESP_OK ||
+     esp_wifi_set_promiscuous(true)!=ESP_OK) {
+    stopPassive();
+    return false;
+  }
+  passiveEnabled=true;
+  passiveIndex=0;
+  passiveNextHopMs=millis()+kPassiveDwellMs;
+  return true;
+}
+#endif
 ScanMode scanMode = ScanMode::Idle;
 uint32_t scanStartedMs = 0;
 uint32_t scanTimeouts = 0;
@@ -572,6 +629,15 @@ void beginSurvey() {
   scanStartedMs = millis();
   ++scanNumber;
   if (scanWifiNext) {
+#if CALLINGCARD_PASSIVE_WIFI
+    if(!startPassive()) {
+      ++errorCount;
+      Serial.println("PASSIVE start_failed=1 falling_back_next_cycle=1");
+      nextScanMs = millis()+kPauseMs;
+      return;
+    }
+    scanMode=ScanMode::Passive;
+#else
     const int rc = WiFi.scanNetworks(true, true);
     if (rc == WIFI_SCAN_FAILED) {
       ++errorCount;
@@ -580,6 +646,7 @@ void beginSurvey() {
       return;
     }
     scanMode = ScanMode::Wifi;
+#endif
   } else {
 #if CALLINGCARD_BLADE_GATT_ONLY
     Serial.println("BLADE survey_ble_skipped=1 gatt_only=1");
@@ -651,6 +718,30 @@ void serviceSurvey() {
     Serial.println("BLADE COEX ble_survey_cancelled=1 reason=not_authenticated");
     return;
   }
+#endif
+#if CALLINGCARD_PASSIVE_WIFI
+  if (scanMode == ScanMode::Passive) {
+    if((int32_t)(millis()-passiveNextHopMs)<0)return;
+    if(++passiveIndex<sizeof(kPassiveChannels)) {
+      const esp_err_t status=esp_wifi_set_channel(kPassiveChannels[passiveIndex],WIFI_SECOND_CHAN_NONE);
+      if(status==ESP_OK) {
+        passiveNextHopMs=millis()+kPassiveDwellMs;
+        return;
+      }
+      ++errorCount;
+      Serial.printf("PASSIVE channel_failed=%d\\n",(int)status);
+    }
+    stopPassive();
+    ++passiveRunCount;
+    const unsigned long beacon=(unsigned long)__atomic_load_n(&passiveCounts[0],__ATOMIC_RELAXED);
+    const unsigned long probe=(unsigned long)__atomic_load_n(&passiveCounts[1],__ATOMIC_RELAXED);
+    const unsigned long response=(unsigned long)__atomic_load_n(&passiveCounts[2],__ATOMIC_RELAXED);
+    const unsigned long deauth=(unsigned long)__atomic_load_n(&passiveCounts[3],__ATOMIC_RELAXED);
+    const unsigned long disassoc=(unsigned long)__atomic_load_n(&passiveCounts[4],__ATOMIC_RELAXED);
+    Serial.printf("PASSIVE window=%lu beacon=%lu probe_req=%lu probe_resp=%lu deauth=%lu disassoc=%lu connected=%u heap=%u\\n",
+      (unsigned long)passiveRunCount,beacon,probe,response,deauth,disassoc,
+      blade.connected()?1:0,ESP.getFreeHeap());
+  } else
 #endif
   if (scanMode == ScanMode::Wifi) {
     const int found = WiFi.scanComplete();
