@@ -15,6 +15,7 @@
 #include <SPI.h>
 #include <SD.h>
 #include "Observation.h"
+#include "ObservationCorrelator.h"
 #include "WifiSignatures.h"
 #include "BleSignatures.h"
 #include "DetectionCooldown.h"
@@ -352,6 +353,15 @@ void refreshGnssAnchor() {
   gnssAnchorMs = millis();
   portEXIT_CRITICAL(&bleMux);
 }
+callingcard::ObservationCorrelator observationCorrelator;
+void annotateCorrelation(callingcard::Observation& observation) {
+  const auto summary=observationCorrelator.observe(observation);
+  if(!summary.matched)return;
+  observation.hasCorrelation=true;
+  observation.correlationSightings=summary.sightings;
+  observation.correlationPeakRssi=summary.strongestRssi;
+  observation.correlationFirstUptimeMs=summary.firstUptimeMs;
+}
 void drainBleSamples(uint8_t maximum = 8) {
   for (uint8_t i = 0; i < maximum; ++i) {
     callingcard::Observation snapshot{};
@@ -403,7 +413,8 @@ void drainBleSamples(uint8_t maximum = 8) {
       snprintf(snapshot.detectionRule,sizeof(snapshot.detectionRule),"%s",
                candidate.ruleId?candidate.ruleId:"");
     }
-    pipeline.enqueue(snapshot); // All classification and GNSS fields snapshot together.
+    annotateCorrelation(snapshot);
+    pipeline.enqueue(snapshot); // All classification, correlation and GNSS fields snapshot together.
 #if CALLINGCARD_BLADE_DETAILS
     // BLE callbacks use the fixed prequeue; forward from main loop so the HUD sees them.
     blade.queueDetail('B', 0, snapshot.rssiDbm, snapshot.label);
@@ -463,6 +474,7 @@ void addObservation(const callingcard::Observation& observation) {
                classified.ruleId?classified.ruleId:"");
     }
   }
+  annotateCorrelation(enriched);
   pipeline.enqueue(enriched);
 #if CALLINGCARD_BLADE_DETAILS
   if (enriched.kind == callingcard::Kind::WifiNetwork)
