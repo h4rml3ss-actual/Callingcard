@@ -1,6 +1,7 @@
 // PR56: isolated NimBLE passkey/MITM/bonding diagnostic, NOT the scanner.
 // Build ONLY with: pio run -e cardputer-nimble-pairing-test
 #include <Arduino.h>
+#include <M5Cardputer.h>
 #include <NimBLEDevice.h>
 #include <esp_system.h>
 
@@ -10,6 +11,30 @@ constexpr const char* kStatus = "cabb1e00-ccad-4abc-a112-24fc00000002";
 uint32_t passkey = 0;
 volatile bool connected = false;
 volatile bool authenticated = false;
+volatile bool passkeyCallbackSeen = false;
+
+void drawPairingStatus() {
+  M5Cardputer.Display.fillScreen(BLACK);
+  M5Cardputer.Display.setTextColor(WHITE, BLACK);
+  M5Cardputer.Display.setTextSize(2);
+  M5Cardputer.Display.setCursor(6, 8);
+  M5Cardputer.Display.println("Callingcard BLE");
+  M5Cardputer.Display.setCursor(6, 36);
+  if (authenticated) {
+    M5Cardputer.Display.setTextColor(GREEN, BLACK);
+    M5Cardputer.Display.println("BONDED / MITM OK");
+  } else {
+    M5Cardputer.Display.println("PAIRING PIN:");
+    M5Cardputer.Display.setTextColor(YELLOW, BLACK);
+    M5Cardputer.Display.printf("%06lu", (unsigned long)passkey);
+    M5Cardputer.Display.setTextColor(WHITE, BLACK);
+    M5Cardputer.Display.setTextSize(1);
+    M5Cardputer.Display.setCursor(6, 90);
+    M5Cardputer.Display.printf("BLE connected: %u  callback: %u", connected ? 1 : 0,
+                               passkeyCallbackSeen ? 1 : 0);
+  }
+}
+
 
 class SecurityEvents : public NimBLEServerCallbacks {
  public:
@@ -42,6 +67,9 @@ SecurityEvents events;
 
 void setup() {
   Serial.begin(115200);
+  auto cfg = M5.config();
+  M5Cardputer.begin(cfg, true);
+  M5Cardputer.Display.setRotation(1);
   delay(1200);
   Serial.println("NIMBLE pairing isolation: NO SD / LoRa / WiFi / scans / CSTP");
   passkey = 100000 + (esp_random() % 900000);
@@ -66,11 +94,22 @@ void setup() {
   Serial.printf("NIMBLE advertising=1 pin=%06lu secure_only=1\n", (unsigned long)passkey);
 }
 void loop() {
-  static uint32_t last = 0;
-  if (millis() - last >= 10000) {
-    last = millis();
-    Serial.printf("NIMBLE state connected=%u authenticated=%u\n",
-                  connected ? 1 : 0, authenticated ? 1 : 0);
+  static uint32_t lastPin = 0;
+  static bool wasConnected = false, wasAuthenticated = false, wasCallbackSeen = false;
+  const uint32_t now = millis();
+  // Keep the PIN visible even if opening the USB monitor misses startup.
+  // Diagnostic profile only: this code must not ship in production firmware.
+  if (!authenticated && (lastPin == 0 || now - lastPin >= 5000)) {
+    lastPin = now;
+    Serial.printf("NIMBLE PAIRING PIN=%06lu connected=%u passkey_callback=%u\\n",
+                  (unsigned long)passkey, connected ? 1 : 0, passkeyCallbackSeen ? 1 : 0);
+  }
+  if (connected != wasConnected || authenticated != wasAuthenticated ||
+      passkeyCallbackSeen != wasCallbackSeen || lastPin == now) {
+    wasConnected = connected;
+    wasAuthenticated = authenticated;
+    wasCallbackSeen = passkeyCallbackSeen;
+    drawPairingStatus();
   }
   delay(50);
 }
