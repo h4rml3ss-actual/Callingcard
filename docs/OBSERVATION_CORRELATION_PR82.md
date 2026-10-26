@@ -3,7 +3,7 @@
 A new header-only `ObservationCorrelator` tracks repeated **classified Wi-Fi/BLE observations** by `source + exact advertised address + detection category`, not by device name, RSSI or geographic proximity. Address case is normalized for comparison.
 
 For matching observations, the JSONL event gains optional `correlation` metadata:
-- `scope: "session_address_type"` — legacy label; this implementation is currently **runtime/boot-scoped** until explicit session lifecycle reset is wired.
+- `scope: "boot_address_type"` — correlation spans the current device uptime (not an SD recording session).
 - `sightings`: number of captured, classified observations for that key (saturates at 65,535)
 - `peak_rssi_dbm`: strongest observed RSSI for that key
 - `first_uptime_ms`: first recorded uptime for that key
