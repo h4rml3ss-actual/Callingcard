@@ -175,7 +175,7 @@ class BladeTelemetry {
       const char* frame=nullptr;
       if(geoPhase_==0)frame=geoFrames_.header;
       else if(geoPhase_==1 && geoFrames_.hasPosition)frame=geoFrames_.position;
-      else if(geoPhase_<=2 && geoFrames_.hasTimestamp)frame=geoFrames_.timestamp;
+      else if(geoPhase_==2 && geoFrames_.hasTimestamp)frame=geoFrames_.timestamp;
       if(frame) {
         alert_->setValue(frame);
         alert_->notify();
