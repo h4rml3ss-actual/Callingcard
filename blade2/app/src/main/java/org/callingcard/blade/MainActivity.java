@@ -47,15 +47,18 @@ public class MainActivity extends Activity {
     private boolean bondingRegistered = false;
     private int lastPairingVariant = -1;
     private long bondStartedMs = -1;
+    // Pairing variant IDs are stable in Android's BluetoothDevice implementation,
+    // but several symbolic constants are hidden from public compile SDK stubs.
+    // Diagnostic only: never use these values to submit or approve a PIN.
     private String pairingVariantName(int variant) {
         switch (variant) {
-            case BluetoothDevice.PAIRING_VARIANT_PIN: return "PIN_LEGACY_OR_STACK_SPECIFIC";
-            case BluetoothDevice.PAIRING_VARIANT_PASSKEY: return "PASSKEY_ENTRY";
-            case BluetoothDevice.PAIRING_VARIANT_PASSKEY_CONFIRMATION: return "PASSKEY_CONFIRMATION";
-            case BluetoothDevice.PAIRING_VARIANT_CONSENT: return "CONSENT";
-            case BluetoothDevice.PAIRING_VARIANT_DISPLAY_PASSKEY: return "DISPLAY_PASSKEY";
-            case BluetoothDevice.PAIRING_VARIANT_DISPLAY_PIN: return "DISPLAY_PIN";
-            case BluetoothDevice.PAIRING_VARIANT_OOB_CONSENT: return "OOB_CONSENT";
+            case 0: return "PIN";
+            case 1: return "PASSKEY_CONFIRMATION";
+            case 2: return "PASSKEY_ENTRY";
+            case 3: return "CONSENT";
+            case 4: return "DISPLAY_PASSKEY";
+            case 5: return "DISPLAY_PIN";
+            case 6: return "OOB_CONSENT";
             default: return "UNKNOWN_" + variant;
         }
     }
