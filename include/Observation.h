@@ -28,6 +28,10 @@ struct Observation {
   char detectionType[12] = {};
   char detectionConfidence[8] = {};
   char detectionRule[48] = {};
+  bool hasCorrelation = false;
+  uint16_t correlationSightings = 0;
+  int16_t correlationPeakRssi = 0;
+  uint32_t correlationFirstUptimeMs = 0;
   bool hasUtc = false;
   char utc[25] = {}; // UTC ISO8601 second precision, Z suffix.
   bool hasPosition = false;
