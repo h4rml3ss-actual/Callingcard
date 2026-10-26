@@ -37,6 +37,10 @@ public class MainActivity extends Activity {
     private String lastAlert = "";
     private long lastAlertMs = -1;
     private int lastAlertSequence = -1;
+    private int lastGeoSequence = -1;
+    private String lastGeoSummary = "";
+    private static final String[] GEO_TYPES =
+        {"FLOCK","ALPR","AXON","CAMERA","TRACKER","META","SKIMMER"};
     private final Handler handler = new Handler(Looper.getMainLooper());
     private TextView display;
     private ScannerHudView graphical;
@@ -373,6 +377,54 @@ public class MainActivity extends Activity {
         final String wire = new String(raw, StandardCharsets.UTF_8);
         handler.post(() -> {
             String[] parts = wire.split(",", -1);
+            // Opt-in v2 stream: H=classified header, P=scaled GPS, T=GNSS UTC.
+            // Sequence numbers prevent late geographic fragments attaching
+            // to a different detection alert.
+            if(parts.length==6 && parts[0].equals("H")) {
+                try {
+                    int seq=Integer.parseInt(parts[1]);
+                    int kind=Integer.parseInt(parts[2]);
+                    int rssi=Integer.parseInt(parts[4]);
+                    if(seq<0||seq>=1000||kind<0||kind>=GEO_TYPES.length||
+                       rssi< -127||rssi>20||
+                       !Arrays.asList("L","M","H").contains(parts[3])||
+                       !Arrays.asList("W","B").contains(parts[5]))return;
+                    lastGeoSequence=seq;
+                    String confidence=parts[3].equals("L")?"LOW":parts[3].equals("M")?"MEDIUM":"HIGH";
+                    String source=parts[5].equals("W")?"Wi-Fi":"BLE";
+                    lastGeoSummary="POSSIBLE "+GEO_TYPES[kind]+" / "+confidence+
+                        " / "+rssi+"dBm / "+source;
+                    lastAlert=lastGeoSummary;
+                    graphical.addDetection(GEO_TYPES[kind],confidence,rssi,source);
+                    graphical.alert=lastAlert;
+                    lastAlertMs=SystemClock.elapsedRealtime();
+                    renderHud();
+                } catch(NumberFormatException ignored) {}
+                return;
+            }
+            if(parts.length==4 && parts[0].equals("P")) {
+                try {
+                    int seq=Integer.parseInt(parts[1]);
+                    long latitude=Integer.parseLong(parts[2]);
+                    long longitude=Integer.parseLong(parts[3]);
+                    if(seq!=lastGeoSequence || latitude< -900000||latitude>900000||
+                        longitude< -1800000||longitude>1800000)return;
+                    lastAlert=lastGeoSummary+" / "+(latitude/10000.0)+","+(longitude/10000.0);
+                    graphical.alert=lastAlert;
+                    lastAlertMs=SystemClock.elapsedRealtime();
+                    Log.i(TAG,"geo candidate "+lastAlert);
+                    renderHud();
+                } catch(NumberFormatException ignored) {}
+                return;
+            }
+            if(parts.length==3 && parts[0].equals("T")) {
+                try {
+                    int seq=Integer.parseInt(parts[1]);
+                    if(seq!=lastGeoSequence||!parts[2].matches("[0-9]{12}"))return;
+                    Log.i(TAG,"geo candidate seq="+seq+" UTC YYMMDDHHMMSS="+parts[2]);
+                } catch(NumberFormatException ignored) {}
+                return;
+            }
             if (parts.length == 5 && parts[0].equals("C")) {
                 String type=parts[1], confidence=parts[2], source=parts[4];
                 if (!Arrays.asList("FLOCK","ALPR","AXON","CAMERA","TRACKER","META","SKIMMER").contains(type)
