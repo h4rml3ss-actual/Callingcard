@@ -6,6 +6,9 @@
 #if CALLINGCARD_PASSIVE_WIFI
 #include <esp_wifi.h>
 #include "PassiveWifiFrames.h"
+#if CALLINGCARD_PASSIVE_INTEGRATED
+#include "IntegratedWifiSchedule.h"
+#endif
 #endif
 #include <BLEDevice.h>
 #include <BLEScan.h>
@@ -275,6 +278,9 @@ uint32_t passiveNextHopMs = 0;
 uint32_t passiveRunCount = 0;
 volatile uint32_t passiveCounts[5] = {};
 bool passiveEnabled = false;
+#if CALLINGCARD_PASSIVE_INTEGRATED
+callingcard::IntegratedWifiSchedule integratedWifi;
+#endif
 void passiveCallback(void* buffer, wifi_promiscuous_pkt_type_t type) {
   if (type != WIFI_PKT_MGMT || !buffer) return;
   const wifi_promiscuous_pkt_t* pkt =
@@ -692,8 +698,21 @@ void beginSurvey() {
   latestCount = 0;
   scanStartedMs = millis();
   ++scanNumber;
+#if CALLINGCARD_PASSIVE_INTEGRATED
+  if(integratedWifi.shouldStartPassive()) {
+    if(!startPassive()) {
+      ++errorCount;
+      integratedWifi.onPassiveFinished();
+      Serial.println("PASSIVE integrated_start_failed=1");
+      nextScanMs=millis()+kPauseMs;
+      return;
+    }
+    scanMode=ScanMode::Passive;
+    return; // Preserve scanWifiNext for the next BLE slot.
+  }
+#endif
   if (scanWifiNext) {
-#if CALLINGCARD_PASSIVE_WIFI
+#if CALLINGCARD_PASSIVE_WIFI && !CALLINGCARD_PASSIVE_INTEGRATED
     if(!startPassive()) {
       ++errorCount;
       Serial.println("PASSIVE start_failed=1 falling_back_next_cycle=1");
@@ -834,6 +853,9 @@ void serviceSurvey() {
     }
     wifiElapsedMs = millis() - scanStartedMs;
     WiFi.scanDelete();
+#if CALLINGCARD_PASSIVE_INTEGRATED
+    integratedWifi.onActiveWifiFinished();
+#endif
     Serial.printf("CYCLE mode=wifi count=%lu duration_ms=%lu timeouts=%lu heap=%u errors=%lu\n",
                   (unsigned long)wifiCount, (unsigned long)wifiElapsedMs,
                   (unsigned long)scanTimeouts, ESP.getFreeHeap(), (unsigned long)errorCount);
