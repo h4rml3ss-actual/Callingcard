@@ -27,6 +27,8 @@ import java.nio.charset.StandardCharsets;
 
 public class MainActivity extends Activity {
     private static final String TAG = "CallingcardBlade";
+    // Temporary rollback: only use with cardputer-blade-details (unencrypted).
+    private static final boolean REQUIRE_BOND = false;
     private static final UUID SERVICE = UUID.fromString("cabb1e00-ccad-4abc-a112-24fc00000001");
     private static final UUID STATUS = UUID.fromString("cabb1e00-ccad-4abc-a112-24fc00000002");
     private static final UUID DETAIL = UUID.fromString("cabb1e00-ccad-4abc-a112-24fc00000004");
@@ -64,7 +66,7 @@ public class MainActivity extends Activity {
     }
     private final BroadcastReceiver pairingReceiver = new BroadcastReceiver() {
         @Override public void onReceive(Context context, Intent intent) {
-            if (!BluetoothDevice.ACTION_PAIRING_REQUEST.equals(intent.getAction())) return;
+            if (!REQUIRE_BOND || !BluetoothDevice.ACTION_PAIRING_REQUEST.equals(intent.getAction())) return;
             BluetoothDevice device = intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE);
             if (device == null || pendingBond == null ||
                 !device.getAddress().equals(pendingBond.getAddress())) return;
@@ -83,7 +85,7 @@ public class MainActivity extends Activity {
     private boolean discoveryStarted = false;
     private final BroadcastReceiver bondReceiver = new BroadcastReceiver() {
         @Override public void onReceive(Context context, Intent intent) {
-            if (!BluetoothDevice.ACTION_BOND_STATE_CHANGED.equals(intent.getAction())) return;
+            if (!REQUIRE_BOND || !BluetoothDevice.ACTION_BOND_STATE_CHANGED.equals(intent.getAction())) return;
             BluetoothDevice device=intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE);
             if(device==null || pendingBond==null || !device.getAddress().equals(pendingBond.getAddress())) return;
             int state=intent.getIntExtra(BluetoothDevice.EXTRA_BOND_STATE,BluetoothDevice.BOND_NONE);
@@ -140,7 +142,7 @@ public class MainActivity extends Activity {
             show("Blade 2 HUD\nConnecting...");
             // Never bypass bond enrollment: connecting unbonded triggered repeated
             // system PIN prompts and raced the separate bond receiver.
-            if (bondFailed || bonding) return;
+            if (REQUIRE_BOND && (bondFailed || bonding)) return;
             pendingBond=device;
             // Open the BLE physical link once, then initiate bonding from the
             // connected state. On some Android BLE stacks createBond() before
@@ -211,9 +213,11 @@ public class MainActivity extends Activity {
         graphical = new ScannerHudView(this);
         setContentView(graphical);
         active = true;
-        registerReceiver(bondReceiver,new IntentFilter(BluetoothDevice.ACTION_BOND_STATE_CHANGED));
-        registerReceiver(pairingReceiver,new IntentFilter(BluetoothDevice.ACTION_PAIRING_REQUEST));
-        bondingRegistered=true;
+        if (REQUIRE_BOND) {
+            registerReceiver(bondReceiver,new IntentFilter(BluetoothDevice.ACTION_BOND_STATE_CHANGED));
+            registerReceiver(pairingReceiver,new IntentFilter(BluetoothDevice.ACTION_PAIRING_REQUEST));
+            bondingRegistered=true;
+        }
         handler.post(freshnessTicker);
         if (Build.VERSION.SDK_INT >= 31 &&
              (checkSelfPermission(Manifest.permission.BLUETOOTH_SCAN) != PackageManager.PERMISSION_GRANTED ||
@@ -235,7 +239,7 @@ public class MainActivity extends Activity {
         return Build.VERSION.SDK_INT < 31 || checkSelfPermission(Manifest.permission.BLUETOOTH_SCAN) == PackageManager.PERMISSION_GRANTED;
     }
     private void startScan() {
-        if (!active || scanning || bonding || bondFailed || gatt!=null || !canScan()) return;
+        if (!active || scanning || (REQUIRE_BOND && (bonding || bondFailed)) || gatt!=null || !canScan()) return;
         BluetoothManager manager = (BluetoothManager)getSystemService(Context.BLUETOOTH_SERVICE);
         BluetoothAdapter adapter = manager == null ? null : manager.getAdapter();
         if (adapter == null || !adapter.isEnabled()) { show("Enable Bluetooth on Blade 2"); return; }
@@ -263,7 +267,10 @@ public class MainActivity extends Activity {
             linkConnected = true;
             if (!canConnect()) return;
             final int bond = client.getDevice().getBondState();
-            if (bond == BluetoothDevice.BOND_BONDED) {
+            if (!REQUIRE_BOND) {
+                Log.i(TAG, "GATT insecure_telemetry=1 no_bond_requested=1");
+                beginServiceDiscovery(client);
+            } else if (bond == BluetoothDevice.BOND_BONDED) {
                 bonding = false;
                 beginServiceDiscovery(client);
             } else if (bond == BluetoothDevice.BOND_BONDING) {
@@ -301,14 +308,14 @@ public class MainActivity extends Activity {
     private void beginServiceDiscovery(BluetoothGatt client) {
         if (!active || !canConnect() || client==null || client != gatt ||
             !linkConnected || discoveryStarted ||
-            client.getDevice().getBondState() != BluetoothDevice.BOND_BONDED) return;
+            (REQUIRE_BOND && client.getDevice().getBondState() != BluetoothDevice.BOND_BONDED)) return;
         discoveryStarted = true;
-        Log.i(TAG, "SMP authenticated_bond=1; starting GATT discovery attempt=" + connectionAttempt);
+        Log.i(TAG, "GATT discovery=1 require_bond=" + REQUIRE_BOND + " attempt=" + connectionAttempt);
         if (!client.requestMtu(100)) client.discoverServices();
     }
     private void connectPaired(BluetoothDevice device) {
         if (!active || !canConnect() || device == null || gatt != null ||
-            bonding || bondFailed) {
+            (REQUIRE_BOND && (bonding || bondFailed))) {
             Log.i(TAG, "GATT duplicate_connect_ignored=1");
             return;
         }
