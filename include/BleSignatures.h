@@ -1,5 +1,6 @@
 #pragma once
 #include "DetectionEngine.h"
+#include "Observation.h"
 #include <stdint.h>
 #include <string.h>
 namespace callingcard {
@@ -68,5 +69,17 @@ inline BleCandidate classifyBle(const char* name, bool hasCompanyId,
   out.detection=classify(type,&e,1);
   out.ruleId=rule;
   return out;
+}
+// Scan every captured service UUID; a generic first service must not mask
+// a later specific candidate. Company payload bytes are captured for future
+// independently validated patterns, but never interpreted as ID by themselves.
+inline BleCandidate classifyBleObservation(const Observation& o) {
+  for(uint8_t i=0;i<o.bleServiceCount && i<4;++i) {
+    const auto candidate=classifyBle(nullptr,o.bleHasCompanyId,
+                                     o.bleCompanyId,o.bleServices[i]);
+    if(candidate.detection.valid)return candidate;
+  }
+  return classifyBle(o.label,o.bleHasCompanyId,o.bleCompanyId,
+                     o.bleServiceCount?nullptr:o.bleServiceUuid);
 }
 } // namespace callingcard
