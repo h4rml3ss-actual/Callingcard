@@ -70,6 +70,7 @@ public class MainActivity extends Activity {
             if(field==0 && !evidence.matches("(?i)[0-9a-f]{2}(:[0-9a-f]{2}){5}"))
                 return;
             Log.i(TAG,"evidence seq="+seq+" field="+parts[2]+" value="+evidence);
+            graphical.updateDetectionEvidence(seq,parts[2],evidence);
             // Retain the bounded completed field for current candidate HUD.
             lastAlert=lastGeoSummary+" / "+(field==0?"ID ":"RULE ")+evidence;
             graphical.alert=lastAlert;
@@ -441,7 +442,7 @@ public class MainActivity extends Activity {
                     lastGeoSummary="POSSIBLE "+GEO_TYPES[kind]+" / "+confidence+
                         " / "+rssi+"dBm / "+source;
                     lastAlert=lastGeoSummary;
-                    graphical.addDetection(GEO_TYPES[kind],confidence,rssi,source);
+                    graphical.addDetection(GEO_TYPES[kind],confidence,rssi,source,seq);
                     graphical.alert=lastAlert;
                     lastAlertMs=SystemClock.elapsedRealtime();
                     renderHud();
@@ -455,6 +456,7 @@ public class MainActivity extends Activity {
                     long longitude=Long.parseLong(parts[3]);
                     if(seq!=lastGeoSequence || latitude< -900000||latitude>900000||
                         longitude< -1800000||longitude>1800000)return;
+                    graphical.updateDetectionLocation(seq,latitude/10000.0,longitude/10000.0);
                     lastAlert=lastGeoSummary+" / "+(latitude/10000.0)+","+(longitude/10000.0);
                     graphical.alert=lastAlert;
                     lastAlertMs=SystemClock.elapsedRealtime();
@@ -467,7 +469,12 @@ public class MainActivity extends Activity {
                 try {
                     int seq=Integer.parseInt(parts[1]);
                     if(seq!=lastGeoSequence||!parts[2].matches("[0-9]{12}"))return;
-                    Log.i(TAG,"geo candidate seq="+seq+" UTC YYMMDDHHMMSS="+parts[2]);
+                    String compact=parts[2];
+                    String iso="20"+compact.substring(0,2)+"-"+compact.substring(2,4)+"-"+
+                        compact.substring(4,6)+"T"+compact.substring(6,8)+":"+
+                        compact.substring(8,10)+":"+compact.substring(10,12)+"Z";
+                    graphical.updateDetectionUtc(seq,iso);
+                    Log.i(TAG,"geo candidate seq="+seq+" UTC="+iso);
                 } catch(NumberFormatException ignored) {}
                 return;
             }
