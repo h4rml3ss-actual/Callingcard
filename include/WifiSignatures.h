@@ -38,6 +38,28 @@ inline WifiCandidate classifyWifi(const char* ssid,const char* bssid) {
   WifiCandidate result;
   uint8_t mac[3]={};
   const bool parsed=parseMacPrefix(bssid,mac);
+  // PR69: Vendor-owned allocations verified by SquachWatch's IEEE audit.
+  // A Motorola Solutions or Genetec AP is NOT necessarily an ALPR device.
+  // Deliberately LOW candidate confidence; no automatic high-certainty claim.
+  struct AlprOui { uint8_t a,b,c; const char* rule; };
+  static const AlprOui kAlpr[] = {
+    {0x00,0x04,0x7D,"alpr-motorola-00047d"},
+    {0x00,0x18,0x85,"alpr-motorola-001885"},
+    {0x00,0x1F,0x92,"alpr-motorola-001f92"},
+    {0x4C,0xCC,0x34,"alpr-motorola-4ccc34"},
+    {0x00,0xBF,0x15,"alpr-genetec-00bf15"},
+    {0x0C,0xBF,0x15,"alpr-genetec-0cbf15"}
+  };
+  if(parsed) for(unsigned i=0;i<sizeof(kAlpr)/sizeof(kAlpr[0]);++i) {
+    const AlprOui& oui=kAlpr[i];
+    if(mac[0]==oui.a && mac[1]==oui.b && mac[2]==oui.c) {
+      const DetectionEvidence ev={EvidenceType::WifiBssid,MatchStrength::Weak,
+        oui.rule,"SquachWatch-CYD/docs/DETECTIONS.md IEEE registry audit"};
+      result.detection=classify(DetectionType::Alpr,&ev,1);
+      result.ruleId=oui.rule;
+      return result;
+    }
+  }
   const bool vendor=parsed && mac[0]==0xB4 && mac[1]==0x1E && mac[2]==0x52;
   const bool name=flockSsid(ssid);
   if(!vendor&&!name)return result;
