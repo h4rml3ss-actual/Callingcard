@@ -1,6 +1,9 @@
 #pragma once
 #include <Arduino.h>
 #include "DetectionEngine.h"
+#if CALLINGCARD_BLADE_GEO_V2
+#include "GeoFrames.h"
+#endif
 #if CALLINGCARD_BLADE_POC
 #include <BLEDevice.h>
 #include <BLEServer.h>
@@ -33,6 +36,21 @@ class BladeTelemetry {
     snprintf(pendingDetection_,sizeof(pendingDetection_),"C,%s,%c,%d,%c",
              detectionTypeName(type),rank,rssi,source);
   }
+#if CALLINGCARD_BLADE_GEO_V2
+  // Entire event comes from one original observation snapshot. No mutation
+  // until the queue has been transmitted, and no late GPS lookup.
+  bool queueGeoDetection(const Observation& observation) {
+    if (geoActive_) return false;
+    GeoFrames next{};
+    const uint16_t seq=static_cast<uint16_t>((geoSequence_+1)%1000);
+    if(!formatGeoFrames(observation,seq,next))return false;
+    geoSequence_=seq;
+    geoFrames_=next;
+    geoActive_=true;
+    geoPhase_=0;
+    return true;
+  }
+#endif
   static constexpr const char* detailUuid() { return "cabb1e00-ccad-4abc-a112-24fc00000004"; }
 #if CALLINGCARD_BLADE_DETAILS
   // Details are opt-in: public unencrypted GATT. Truncated labels only; no MACs or coordinates.
@@ -148,6 +166,25 @@ class BladeTelemetry {
       lastDetailMs_ = millis();
     }
 #endif
+#if CALLINGCARD_BLADE_GEO_V2
+    if (callbacks_.connected &&
+#if CALLINGCARD_BLADE_SECURE
+        secureReady &&
+#endif
+        geoActive_) {
+      const char* frame=nullptr;
+      if(geoPhase_==0)frame=geoFrames_.header;
+      else if(geoPhase_==1 && geoFrames_.hasPosition)frame=geoFrames_.position;
+      else if(geoPhase_==2 && geoFrames_.hasTimestamp)frame=geoFrames_.timestamp;
+      if(frame) {
+        alert_->setValue(frame);
+        alert_->notify();
+        Serial.printf("BLADE geo=%s\\n",frame);
+      }
+      ++geoPhase_;
+      if(geoPhase_>=3){geoActive_=false;geoPhase_=0;}
+    }
+#endif
     if (callbacks_.connected &&
 #if CALLINGCARD_BLADE_SECURE
         secureReady &&
@@ -251,6 +288,12 @@ class BladeTelemetry {
   uint8_t detailHead_ = 0, detailTail_ = 0, detailCount_ = 0;
   uint32_t detailDropped_ = 0;
   uint32_t lastDetailMs_ = 0;
+#endif
+#if CALLINGCARD_BLADE_GEO_V2
+  GeoFrames geoFrames_{};
+  bool geoActive_=false;
+  uint8_t geoPhase_=0;
+  uint16_t geoSequence_=0;
 #endif
   char pendingDetection_[32] = {};
   char pendingSource_ = 0;
